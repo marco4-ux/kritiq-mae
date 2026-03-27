@@ -11,6 +11,7 @@ COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m demucs --help || true && python -c "from demucs.pretrained import get_model; get_model('htdemucs')"
 
 # Copy app code
 COPY . .
