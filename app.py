@@ -55,34 +55,40 @@ def test_ffmpeg():
             os.unlink(output_path)
 
 
-@app.route("/test-demucs", methods=["POST"])
+@app.route("/test-demucs", methods=["POST", "OPTIONS"])
 def test_demucs():
     """Test that Demucs can separate audio stems"""
+    if request.method == "OPTIONS":
+        return '', 200
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     
     file = request.files["file"]
     
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_in:
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_in:
         file.save(tmp_in.name)
         input_path = tmp_in.name
     
-    output_dir = tempfile.mkdtemp()
+    wav_path = input_path.replace(".mp4", ".wav")
     
     try:
-        # Run Demucs separation - htdemucs is the v4 model
+        subprocess.run(
+            ["ffmpeg", "-i", input_path, "-ar", "44100", "-ac", "2", "-y", wav_path],
+            capture_output=True, text=True, timeout=60
+        )
+        os.unlink(input_path)
+        
         result = subprocess.run(
-            ["python", "-m", "demucs", "--two-stems", "vocals", 
-             "-o", output_dir, "--mp3", input_path],
+            ["python", "-m", "demucs", "--two-stems", "vocals",
+             "-o", "/tmp/demucs_out", "--mp3", wav_path],
             capture_output=True, text=True, timeout=300
         )
         
         if result.returncode != 0:
             return jsonify({"error": "Demucs failed", "stderr": result.stderr}), 500
         
-        # Find output files
         stems_found = []
-        for root, dirs, files in os.walk(output_dir):
+        for root, dirs, files in os.walk("/tmp/demucs_out"):
             for f in files:
                 filepath = os.path.join(root, f)
                 stems_found.append({
@@ -96,39 +102,44 @@ def test_demucs():
             "stems": stems_found
         })
     finally:
-        os.unlink(input_path)
-        # Clean up output dir
-        subprocess.run(["rm", "-rf", output_dir], capture_output=True)
+        if os.path.exists(wav_path):
+            os.unlink(wav_path)
+        subprocess.run(["rm", "-rf", "/tmp/demucs_out"], capture_output=True)
 
-
-@app.route("/test-pitch", methods=["POST"])
+@app.route("/test-pitch", methods=["POST", "OPTIONS"])
 def test_pitch():
-    """Test pitch detection with librosa + crepe"""
+    """Test pitch detection with librosa"""
+    if request.method == "OPTIONS":
+        return '', 200
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     
     file = request.files["file"]
     
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_in:
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_in:
         file.save(tmp_in.name)
         input_path = tmp_in.name
     
+    wav_path = input_path.replace(".mp4", ".wav")
+    
     try:
+        subprocess.run(
+            ["ffmpeg", "-i", input_path, "-ar", "22050", "-ac", "1", "-y", wav_path],
+            capture_output=True, text=True, timeout=60
+        )
+        os.unlink(input_path)
+        
         import librosa
         import numpy as np
         
-        # Load audio
-        y, sr = librosa.load(input_path, sr=22050)
+        y, sr = librosa.load(wav_path, sr=22050)
         duration = librosa.get_duration(y=y, sr=sr)
         
-        # Chroma features (pitch classes)
         chroma = librosa.feature.chroma_stft(y=y, sr=sr)
         
-        # Get the most prominent pitch class per frame
         pitch_classes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
         dominant_pitches = []
         
-        # Sample every ~1 second
         hop_length = 512
         frames_per_second = sr / hop_length
         for i in range(0, chroma.shape[1], max(1, int(frames_per_second))):
@@ -145,10 +156,11 @@ def test_pitch():
             "message": "Pitch detection complete",
             "duration_seconds": round(duration, 2),
             "sample_rate": sr,
-            "detected_pitches": dominant_pitches[:20]  # First 20 seconds
+            "detected_pitches": dominant_pitches[:30]
         })
     finally:
-        os.unlink(input_path)
+        if os.path.exists(wav_path):
+            os.unlink(wav_path)
 
 
 if __name__ == "__main__":
