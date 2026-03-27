@@ -73,13 +73,14 @@ def test_demucs():
     
     try:
         subprocess.run(
-           ["ffmpeg", "-i", input_path, "-ar", "44100", "-ac", "1", "-t", "60", "-y", wav_path],
+           ["ffmpeg", "-i", input_path, "-ar", "44100", "-ac", "1", "-t", "30", "-y", wav_path],
             capture_output=True, text=True, timeout=60
         )
         os.unlink(input_path)
         
         result = subprocess.run(
             ["python", "-m", "demucs", "--two-stems", "vocals",
+             "-n", "htdemucs", "--segment", "10",
              "-o", "/tmp/demucs_out", "--mp3", wav_path],
             capture_output=True, text=True, timeout=300
         )
