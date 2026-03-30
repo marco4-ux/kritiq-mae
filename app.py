@@ -193,6 +193,8 @@ def cache_song_reference(track_info: dict, reference_analysis: dict) -> None:
         return
     
     try:
+        from datetime import datetime, timezone
+        
         payload = {
             "title": track_info.get("title", ""),
             "artist": track_info.get("artist", ""),
@@ -200,9 +202,9 @@ def cache_song_reference(track_info: dict, reference_analysis: dict) -> None:
             "deezer_preview_url": track_info.get("preview_url"),
             "album": track_info.get("album"),
             "duration_seconds": track_info.get("duration"),
-            "reference_analysis": json.dumps(reference_analysis) if isinstance(reference_analysis, dict) else reference_analysis,
+            "reference_analysis": reference_analysis,  # PostgREST accepts dicts for JSONB
             "reference_source": "deezer",
-            "reference_analyzed_at": "now()",
+            "reference_analyzed_at": datetime.now(timezone.utc).isoformat(),
         }
         
         # Upsert — insert or update on conflict (title + artist unique constraint)
@@ -212,8 +214,11 @@ def cache_song_reference(track_info: dict, reference_analysis: dict) -> None:
             json=payload,
             timeout=10,
         )
-        resp.raise_for_status()
-        logger.info(f"Cached reference: {track_info.get('title')} by {track_info.get('artist')}")
+        
+        if resp.status_code >= 400:
+            logger.warning(f"Supabase cache save HTTP {resp.status_code}: {resp.text[:500]}")
+        else:
+            logger.info(f"Cached reference: {track_info.get('title')} by {track_info.get('artist')}")
     except Exception as e:
         logger.warning(f"Supabase cache save failed: {e}")
 
@@ -793,6 +798,7 @@ def analyze():
         # Step 8: Save submission to Supabase (non-blocking, don't fail pipeline if this fails)
         submission_id = None
         try:
+            from datetime import datetime, timezone
             submission_data = {
                 "skill_level": request.form.get("skill_level", "Intermediate"),
                 "harshness": request.form.get("harshness", "Supportive Producer"),
@@ -802,20 +808,20 @@ def analyze():
                 "intentional_choices": request.form.get("intentional_choices"),
                 "influence": request.form.get("influence"),
                 "reference_weighting": ref_mode.capitalize(),
-                "stems": json.dumps({
+                "stems": {
                     "vocals": vocals_url, "bass": bass_url,
                     "drums": drums_url, "other": other_url, "guitar": guitar_url,
-                }),
-                "performance_analysis": json.dumps(metrics),
-                "scores": json.dumps(scores),
-                "feedback": json.dumps(feedback) if feedback else None,
-                "pipeline_timing": json.dumps({
+                },
+                "performance_analysis": metrics,
+                "scores": scores,
+                "feedback": feedback,
+                "pipeline_timing": {
                     "ffmpeg": round(t1 - t0, 2), "demucs": round(t2 - t1, 2),
                     "librosa": round(t3 - t2, 2), "scoring": round(t4 - t3, 2),
                     "feedback": round(t5 - t4, 2), "total": round(t5 - t0, 2),
-                }),
+                },
                 "status": "completed",
-                "completed_at": "now()",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
             }
             submission_id = save_submission(submission_data)
         except Exception as e:
