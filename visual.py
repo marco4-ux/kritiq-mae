@@ -157,9 +157,7 @@ def _analyze_frames(frame_paths: list, instrument: str = "") -> dict:
         instrument_note = f"\n\nIMPORTANT: The performer is playing {instrument}. Only comment on this instrument. Do NOT assume they are playing other instruments that may be visible in the frame."
     
     # Add the analysis prompt
-    content.append({
-        "type": "text",
-        "text": f"""Analyze these frames from a musician's cover performance video.{instrument_note}
+    prompt_text = f"Analyze these frames from a musician's cover performance video.{instrument_note}" + """
 
 Score their visual presence on a scale of 1-10 where:
 - 9-10: Professional stage presence, great framing, confident posture, engaging energy
@@ -180,6 +178,10 @@ Respond ONLY with valid JSON:
 Include 3-5 items in visual_feedback covering: framing/camera angle, lighting, 
 posture/technique, energy/engagement, and gear/environment.
 Do NOT include any text outside the JSON."""
+    
+    content.append({
+        "type": "text",
+        "text": prompt_text,
     })
     
     system_prompt = f"""You are evaluating a musician's visual performance presence from video frames.
