@@ -758,48 +758,66 @@ def analyze():
         temp_files.append(wav_path)
         t1 = time.time()
         
-        # Step 2: Send to Replicate Demucs for stem separation
-        logger.info("Step 2: Uploading to Replicate Demucs...")
-        audio_url = upload_for_replicate(wav_path)
-        stems_output, demucs_time = separate_stems_replicate(audio_url)
-        t2 = time.time()
+        # Check if solo performance (skip Demucs) or full mix (use Demucs)
+        solo_performance = request.form.get("solo_performance", "true").lower() in ("true", "1", "yes")
         
-        # Step 3: Parse Demucs output
-        # Actual format: {"bass": url, "drums": url, "other": url, "vocals": url, "guitar": null, "piano": null}
-        logger.info(f"Step 3: Demucs output: {stems_output}")
+        vocals_url = None
+        bass_url = None
+        drums_url = None
+        other_url = None
+        guitar_url = None
+        demucs_time = 0
         
-        vocals_url = stems_output.get("vocals") if isinstance(stems_output, dict) else None
-        bass_url = stems_output.get("bass") if isinstance(stems_output, dict) else None
-        drums_url = stems_output.get("drums") if isinstance(stems_output, dict) else None
-        other_url = stems_output.get("other") if isinstance(stems_output, dict) else None
-        guitar_url = stems_output.get("guitar") if isinstance(stems_output, dict) else None
+        if solo_performance:
+            # Solo performance: skip Demucs, analyze raw audio directly
+            logger.info("Step 2: Solo performance — skipping Demucs, analyzing raw audio...")
+            
+            # Convert to mono 22050 for Librosa
+            analysis_wav = wav_path + ".analysis.wav"
+            temp_files.append(analysis_wav)
+            subprocess.run(
+                ["ffmpeg", "-i", wav_path, "-ar", "22050", "-ac", "1", "-y", analysis_wav],
+                capture_output=True, text=True, timeout=30
+            )
+            t2 = time.time()
+        else:
+            # Full mix: use Demucs for stem separation
+            logger.info("Step 2: Uploading to Replicate Demucs...")
+            audio_url = upload_for_replicate(wav_path)
+            stems_output, demucs_time = separate_stems_replicate(audio_url)
+            t2 = time.time()
+            
+            # Parse Demucs output
+            logger.info(f"Step 3: Demucs output: {stems_output}")
+            
+            vocals_url = stems_output.get("vocals") if isinstance(stems_output, dict) else None
+            bass_url = stems_output.get("bass") if isinstance(stems_output, dict) else None
+            drums_url = stems_output.get("drums") if isinstance(stems_output, dict) else None
+            other_url = stems_output.get("other") if isinstance(stems_output, dict) else None
+            guitar_url = stems_output.get("guitar") if isinstance(stems_output, dict) else None
+            
+            instrument_url = other_url
+            if not instrument_url:
+                return jsonify({
+                    "error": "Could not identify instrument stem from Demucs output",
+                    "demucs_output": str(stems_output),
+                }), 500
+            
+            # Download instrument stem and convert for Librosa
+            logger.info("Step 4: Downloading instrument stem for Librosa analysis...")
+            stem_path = tempfile.mktemp(suffix=".wav")
+            temp_files.append(stem_path)
+            download_stem(instrument_url, stem_path)
+            
+            analysis_wav = stem_path + ".analysis.wav"
+            temp_files.append(analysis_wav)
+            subprocess.run(
+                ["ffmpeg", "-i", stem_path, "-ar", "22050", "-ac", "1", "-y", analysis_wav],
+                capture_output=True, text=True, timeout=30
+            )
         
-        # "other" is the instrument stem (everything not vocals/drums/bass)
-        # For guitar/piano covers, this is the primary analysis target
-        instrument_url = other_url
-        
-        if not instrument_url:
-            return jsonify({
-                "error": "Could not identify instrument stem from Demucs output",
-                "demucs_output": str(stems_output),
-            }), 500
-        
-        # Step 4: Download instrument stem and analyze with Librosa
-        logger.info("Step 4: Downloading instrument stem for Librosa analysis...")
-        stem_path = tempfile.mktemp(suffix=".wav")
-        temp_files.append(stem_path)
-        download_stem(instrument_url, stem_path)
-        
-        # Convert to mono 22050 for Librosa
-        stem_wav = stem_path + ".analysis.wav"
-        temp_files.append(stem_wav)
-        subprocess.run(
-            ["ffmpeg", "-i", stem_path, "-ar", "22050", "-ac", "1", "-y", stem_wav],
-            capture_output=True, text=True, timeout=30
-        )
-        
-        logger.info("Step 5: Running Librosa analysis on instrument stem...")
-        metrics = analyze_stem(stem_wav)
+        logger.info("Step 5: Running Librosa analysis...")
+        metrics = analyze_stem(analysis_wav)
         t3 = time.time()
         
         # Step 6: Calculate deterministic scores from metrics
