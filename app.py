@@ -14,6 +14,7 @@ app = Flask(__name__)
 
 REPLICATE_API_TOKEN = os.environ.get("REPLICATE_API_TOKEN", "")
 REPLICATE_MODEL = "cjwbw/demucs"
+REPLICATE_VERSION = "25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953"
 
 @app.after_request
 def after_request(response):
@@ -81,6 +82,7 @@ def separate_stems_replicate(audio_url):
     }
     
     payload = {
+        "version": REPLICATE_VERSION,
         "input": {
             "audio": audio_url,
             "model_name": "htdemucs",
@@ -89,7 +91,7 @@ def separate_stems_replicate(audio_url):
     
     logger.info("Sending to Replicate Demucs (sync mode)...")
     resp = http_requests.post(
-        f"https://api.replicate.com/v1/models/{REPLICATE_MODEL}/predictions",
+        "https://api.replicate.com/v1/predictions",
         headers=headers,
         json=payload,
         timeout=120,
