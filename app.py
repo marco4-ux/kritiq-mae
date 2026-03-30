@@ -303,6 +303,93 @@ def test_pitch():
         if os.path.exists(wav): os.unlink(wav)
 
 
+@app.route("/test-ytdlp", methods=["GET", "POST", "OPTIONS"])
+def test_ytdlp():
+    """Test if yt-dlp can download audio from YouTube on Railway."""
+    if request.method == "OPTIONS":
+        return '', 200
+    
+    # Accept song query via POST JSON or GET query param
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        query = data.get("query", "Hey There Delilah Plain White T's")
+    else:
+        query = request.args.get("query", "Hey There Delilah Plain White T's")
+    
+    output_path = f"/tmp/ytdlp_test_{int(time.time())}"
+    
+    try:
+        t0 = time.time()
+        
+        # Step 1: Search and download audio only, max 30 seconds
+        cmd = [
+            "yt-dlp",
+            "-x",                          # extract audio only
+            "--audio-format", "wav",        # convert to wav
+            "--audio-quality", "0",         # best quality
+            "-o", f"{output_path}.%(ext)s", # output template
+            "--no-playlist",                # single video only
+            "--match-filter", "duration < 600",  # skip videos > 10 min
+            "--postprocessor-args", "ffmpeg:-t 30",  # only keep first 30 seconds
+            f"ytsearch1:{query}",           # search YouTube, take first result
+        ]
+        
+        logger.info(f"Running yt-dlp with query: {query}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        t1 = time.time()
+        
+        # Check for output file
+        wav_path = f"{output_path}.wav"
+        if not os.path.exists(wav_path):
+            # yt-dlp might have used a different extension
+            import glob
+            matches = glob.glob(f"{output_path}.*")
+            return jsonify({
+                "status": "error",
+                "message": "yt-dlp did not produce expected output",
+                "stdout": result.stdout[-1000:] if result.stdout else "",
+                "stderr": result.stderr[-1000:] if result.stderr else "",
+                "returncode": result.returncode,
+                "files_found": matches,
+                "elapsed_seconds": round(t1 - t0, 2),
+            }), 500
+        
+        file_size = os.path.getsize(wav_path)
+        
+        # Step 2: Quick Librosa check on the downloaded audio
+        import librosa
+        import numpy as np
+        
+        y, sr = librosa.load(wav_path, sr=22050, duration=30)
+        duration = librosa.get_duration(y=y, sr=sr)
+        chroma = librosa.feature.chroma_stft(y=y, sr=sr)
+        pitch_classes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+        chroma_mean = np.mean(chroma, axis=1)
+        detected_key = pitch_classes[int(np.argmax(chroma_mean))]
+        
+        return jsonify({
+            "status": "ok",
+            "message": "yt-dlp download and analysis working",
+            "query": query,
+            "file_size_bytes": file_size,
+            "duration_seconds": round(duration, 2),
+            "detected_key": detected_key,
+            "elapsed_seconds": round(t1 - t0, 2),
+            "stdout_tail": result.stdout[-500:] if result.stdout else "",
+        })
+    
+    except subprocess.TimeoutExpired:
+        return jsonify({"status": "error", "message": "yt-dlp timed out after 120s"}), 500
+    except Exception as e:
+        logger.exception("test-ytdlp failed")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        import glob
+        for f in glob.glob(f"{output_path}*"):
+            try: os.unlink(f)
+            except: pass
+
+
 @app.route("/analyze", methods=["POST", "OPTIONS"])
 def analyze():
     """
