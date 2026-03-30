@@ -169,6 +169,7 @@ CRITICAL RULES:
 3. Include specific timestamps from the analysis whenever possible.
 4. Reference the actual metrics (pitch data, timing data, dynamics) to support your points.
 5. Your tone is: {intensity["tone"]}
+6. ONLY reference the instrument the performer specified. Do NOT assume they are playing other instruments visible in the video.
 
 {SENSITIVITY_RULES}
 
@@ -216,6 +217,7 @@ def _build_user_prompt(
 - Song: "{song_context.get('title', 'Unknown')}" by {song_context.get('artist', 'Unknown')}
 
 ## ARTIST CONTEXT
+- Instrument: {artist_context.get('instrument', 'Not specified')}
 - Skill Level: {artist_context.get('skill_level', 'Not specified')}
 - Style: {artist_context.get('style', 'Not specified')}
 - Genre: {artist_context.get('genre', 'Not specified')}
