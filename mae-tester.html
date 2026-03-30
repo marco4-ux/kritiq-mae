@@ -69,7 +69,20 @@
   <h2>5. Full Pipeline (/analyze)</h2>
   <div class="test-block">
     <input type="file" id="analyze-file" accept="video/*,audio/*" />
-    <button onclick="testEndpoint('analyze', 'analyze')">Run Full Analysis</button>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
+      <input type="text" id="analyze-song-title" placeholder="Song title (e.g. Hey There Delilah)" style="padding:6px; background:#222; border:1px solid #333; color:#eee; border-radius:4px;" />
+      <input type="text" id="analyze-song-artist" placeholder="Artist (e.g. Plain White T's)" style="padding:6px; background:#222; border:1px solid #333; color:#eee; border-radius:4px;" />
+      <select id="analyze-ref-mode" style="padding:6px; background:#222; border:1px solid #333; color:#eee; border-radius:4px;">
+        <option value="creative">Creative Mode (internal consistency)</option>
+        <option value="strict">Strict Mode (compare to reference)</option>
+      </select>
+      <select id="analyze-harshness" style="padding:6px; background:#222; border:1px solid #333; color:#eee; border-radius:4px;">
+        <option value="Supportive Producer">Supportive Producer</option>
+        <option value="Brutal">Brutal</option>
+        <option value="Militant">Militant</option>
+      </select>
+    </div>
+    <button onclick="testAnalyze()">Run Full Analysis</button>
     <div id="analyze-status"></div>
     <pre id="analyze-result"></pre>
   </div>
@@ -113,6 +126,43 @@
       const start = Date.now();
       try {
         const res = await fetch(getUrl() + '/' + endpoint, {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await res.json();
+        const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+        el.textContent = JSON.stringify(data, null, 2);
+        st.innerHTML = `<span class="status ${data.status === 'ok' ? 'ok' : 'error'}">${data.status || 'error'} (${elapsed}s)</span>`;
+      } catch (e) {
+        const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+        el.textContent = e.message;
+        st.innerHTML = `<span class="status error">FAILED (${elapsed}s)</span>`;
+      }
+    }
+
+    async function testAnalyze() {
+      const fileInput = document.getElementById('analyze-file');
+      const el = document.getElementById('analyze-result');
+      const st = document.getElementById('analyze-status');
+
+      if (!fileInput.files.length) {
+        el.textContent = 'Please select a file first';
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+      formData.append('song_title', document.getElementById('analyze-song-title').value);
+      formData.append('song_artist', document.getElementById('analyze-song-artist').value);
+      formData.append('reference_weighting', document.getElementById('analyze-ref-mode').value);
+      formData.append('harshness', document.getElementById('analyze-harshness').value);
+
+      st.innerHTML = '<span class="status loading">Processing full pipeline... (60-90s)</span>';
+      el.textContent = '';
+
+      const start = Date.now();
+      try {
+        const res = await fetch(getUrl() + '/analyze', {
           method: 'POST',
           body: formData,
         });
