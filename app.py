@@ -560,6 +560,18 @@ def analyze():
         metrics = analyze_stem(stem_wav)
         t3 = time.time()
         
+        # Step 6: Calculate deterministic scores from metrics
+        logger.info("Step 6: Calculating scores...")
+        from scoring import calculate_scores
+        
+        # Get reference mode and optional reference data from request
+        ref_mode = request.form.get("reference_weighting", "creative").lower()
+        
+        # TODO: look up Deezer reference from Supabase cache by song_id
+        # For now, score in creative mode only
+        scores = calculate_scores(metrics, reference_analysis=None, mode=ref_mode)
+        t4 = time.time()
+        
         return jsonify({
             "status": "ok",
             "pipeline_timing": {
@@ -567,7 +579,8 @@ def analyze():
                 "demucs_seconds": round(t2 - t1, 2),
                 "demucs_predict_seconds": round(demucs_time, 2),
                 "librosa_seconds": round(t3 - t2, 2),
-                "total_seconds": round(t3 - t0, 2),
+                "scoring_seconds": round(t4 - t3, 2),
+                "total_seconds": round(t4 - t0, 2),
             },
             "stems": {
                 "vocals": vocals_url,
@@ -577,6 +590,7 @@ def analyze():
                 "guitar": guitar_url,
             },
             "analysis": metrics,
+            "scores": scores,
         })
     
     except Exception as e:
