@@ -34,13 +34,14 @@ not directly related to their musical performance technique.
 """
 
 
-def analyze_video(video_path: str, num_frames: int = 3) -> dict:
+def analyze_video(video_path: str, num_frames: int = 3, instrument: str = "") -> dict:
     """
     Extract frames from video, send to Claude Vision for visual analysis.
     
     Args:
         video_path: path to the uploaded video file
         num_frames: how many evenly-spaced frames to extract (default 3)
+        instrument: what the user is playing (e.g. "Guitar", "Vocals")
     
     Returns:
         {
@@ -62,7 +63,7 @@ def analyze_video(video_path: str, num_frames: int = 3) -> dict:
             return None
         
         # Step 2: Send to Claude Vision
-        result = _analyze_frames(frames)
+        result = _analyze_frames(frames, instrument=instrument)
         
         # Step 3: Cleanup
         for f in frames:
@@ -129,7 +130,7 @@ def _extract_frames(video_path: str, num_frames: int = 3) -> list:
     return frames
 
 
-def _analyze_frames(frame_paths: list) -> dict:
+def _analyze_frames(frame_paths: list, instrument: str = "") -> dict:
     """Send frames to Claude Vision and get visual analysis."""
     
     # Build message content with images
@@ -151,10 +152,14 @@ def _analyze_frames(frame_paths: list) -> dict:
             "text": f"Frame {i+1} of {len(frame_paths)} from the performance video.",
         })
     
+    instrument_note = ""
+    if instrument:
+        instrument_note = f"\n\nIMPORTANT: The performer is playing {instrument}. Only comment on this instrument. Do NOT assume they are playing other instruments that may be visible in the frame."
+    
     # Add the analysis prompt
     content.append({
         "type": "text",
-        "text": """Analyze these frames from a musician's cover performance video.
+        "text": f"""Analyze these frames from a musician's cover performance video.{instrument_note}
 
 Score their visual presence on a scale of 1-10 where:
 - 9-10: Professional stage presence, great framing, confident posture, engaging energy
