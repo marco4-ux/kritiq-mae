@@ -390,6 +390,102 @@ def test_ytdlp():
             except: pass
 
 
+@app.route("/test-deezer", methods=["GET", "POST", "OPTIONS"])
+def test_deezer():
+    """Test Deezer API: search for a song, download 30s preview, run Librosa."""
+    if request.method == "OPTIONS":
+        return '', 200
+    
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        query = data.get("query", "Hey There Delilah Plain White T's")
+    else:
+        query = request.args.get("query", "Hey There Delilah Plain White T's")
+    
+    preview_path = None
+    wav_path = None
+    
+    try:
+        t0 = time.time()
+        
+        # Step 1: Search Deezer
+        logger.info(f"Searching Deezer for: {query}")
+        search_resp = http_requests.get(
+            "https://api.deezer.com/search",
+            params={"q": query},
+            timeout=15,
+        )
+        search_resp.raise_for_status()
+        search_data = search_resp.json()
+        
+        if not search_data.get("data"):
+            return jsonify({"status": "error", "message": "No results found on Deezer", "query": query}), 404
+        
+        track = search_data["data"][0]
+        track_info = {
+            "title": track.get("title"),
+            "artist": track.get("artist", {}).get("name"),
+            "album": track.get("album", {}).get("title"),
+            "duration": track.get("duration"),
+            "deezer_id": track.get("id"),
+            "preview_url": track.get("preview"),
+        }
+        
+        preview_url = track.get("preview")
+        if not preview_url:
+            return jsonify({
+                "status": "error",
+                "message": "Track found but no preview URL available",
+                "track": track_info,
+            }), 404
+        
+        t1 = time.time()
+        
+        # Step 2: Download the 30s preview MP3
+        logger.info(f"Downloading preview: {preview_url}")
+        preview_path = f"/tmp/deezer_preview_{int(time.time())}.mp3"
+        dl_resp = http_requests.get(preview_url, timeout=30)
+        dl_resp.raise_for_status()
+        with open(preview_path, "wb") as f:
+            f.write(dl_resp.content)
+        
+        preview_size = os.path.getsize(preview_path)
+        t2 = time.time()
+        
+        # Step 3: Convert to WAV and run Librosa
+        wav_path = preview_path + ".wav"
+        subprocess.run(
+            ["ffmpeg", "-i", preview_path, "-ar", "22050", "-ac", "1", "-y", wav_path],
+            capture_output=True, text=True, timeout=30,
+        )
+        
+        metrics = analyze_stem(wav_path)
+        t3 = time.time()
+        
+        return jsonify({
+            "status": "ok",
+            "message": "Deezer preview download and analysis working",
+            "track": track_info,
+            "preview_size_bytes": preview_size,
+            "timing": {
+                "search_seconds": round(t1 - t0, 2),
+                "download_seconds": round(t2 - t1, 2),
+                "analysis_seconds": round(t3 - t2, 2),
+                "total_seconds": round(t3 - t0, 2),
+            },
+            "analysis": metrics,
+        })
+    
+    except Exception as e:
+        logger.exception("test-deezer failed")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if preview_path and os.path.exists(preview_path):
+            os.unlink(preview_path)
+        if wav_path and os.path.exists(wav_path):
+            os.unlink(wav_path)
+
+
 @app.route("/analyze", methods=["POST", "OPTIONS"])
 def analyze():
     """
