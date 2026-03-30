@@ -572,6 +572,32 @@ def analyze():
         scores = calculate_scores(metrics, reference_analysis=None, mode=ref_mode)
         t4 = time.time()
         
+        # Step 7: Generate Claude feedback (optional — skip if no API key)
+        feedback = None
+        from feedback import generate_feedback, ANTHROPIC_API_KEY as _ak
+        if _ak:
+            logger.info("Step 7: Generating Claude feedback...")
+            song_context = {
+                "title": request.form.get("song_title", "Unknown"),
+                "artist": request.form.get("song_artist", "Unknown"),
+            }
+            artist_context = {
+                "skill_level": request.form.get("skill_level", "Intermediate"),
+                "harshness": request.form.get("harshness", "Supportive Producer"),
+                "style": request.form.get("style", "Original Style"),
+                "genre": request.form.get("genre", ""),
+                "environment": request.form.get("environment", "Bedroom Tape"),
+                "intentional_choices": request.form.get("intentional_choices", ""),
+                "influence": request.form.get("influence", ""),
+            }
+            feedback = generate_feedback(
+                scores=scores,
+                analysis=metrics,
+                song_context=song_context,
+                artist_context=artist_context,
+            )
+        t5 = time.time()
+        
         return jsonify({
             "status": "ok",
             "pipeline_timing": {
@@ -580,7 +606,8 @@ def analyze():
                 "demucs_predict_seconds": round(demucs_time, 2),
                 "librosa_seconds": round(t3 - t2, 2),
                 "scoring_seconds": round(t4 - t3, 2),
-                "total_seconds": round(t4 - t0, 2),
+                "feedback_seconds": round(t5 - t4, 2),
+                "total_seconds": round(t5 - t0, 2),
             },
             "stems": {
                 "vocals": vocals_url,
@@ -591,6 +618,7 @@ def analyze():
             },
             "analysis": metrics,
             "scores": scores,
+            "feedback": feedback,
         })
     
     except Exception as e:
