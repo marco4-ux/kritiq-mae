@@ -857,8 +857,9 @@ def analyze():
         # Step 7: Visual analysis via Claude Vision (runs on original video, not audio)
         visual_analysis = None
         from visual import analyze_video
+        instrument = request.form.get("instrument", "")
         logger.info("Step 7: Running visual analysis on video frames...")
-        visual_analysis = analyze_video(input_path)
+        visual_analysis = analyze_video(input_path, instrument=instrument)
         t_visual = time.time()
         
         # Step 8: Generate Claude feedback (optional — skip if no API key)
@@ -873,6 +874,7 @@ def analyze():
             artist_context = {
                 "skill_level": request.form.get("skill_level", "Intermediate"),
                 "harshness": request.form.get("harshness", "Supportive Producer"),
+                "instrument": instrument,
                 "style": request.form.get("style", "Original Style"),
                 "genre": request.form.get("genre", ""),
                 "environment": request.form.get("environment", "Bedroom Tape"),
