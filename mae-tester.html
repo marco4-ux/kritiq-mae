@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Kritiq MAE Tester</title>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, sans-serif; }
+    body { max-width: 800px; margin: 40px auto; padding: 0 20px; background: #111; color: #eee; }
+    h1 { color: #7c3aed; }
+    h2 { color: #a78bfa; margin-top: 2em; }
+    input, button, textarea { font-size: 14px; }
+    .config { background: #1a1a2e; padding: 16px; border-radius: 8px; margin-bottom: 20px; }
+    .config label { display: block; margin-bottom: 4px; color: #888; }
+    .config input { width: 100%; padding: 8px; background: #222; border: 1px solid #333; color: #eee; border-radius: 4px; }
+    .test-block { background: #1a1a2e; padding: 16px; border-radius: 8px; margin-bottom: 16px; }
+    button { background: #7c3aed; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; margin-top: 8px; }
+    button:hover { background: #6d28d9; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    pre { background: #0a0a1a; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 12px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; }
+    .status { padding: 4px 8px; border-radius: 4px; display: inline-block; margin-top: 8px; }
+    .status.ok { background: #065f46; color: #6ee7b7; }
+    .status.error { background: #7f1d1d; color: #fca5a5; }
+    .status.loading { background: #78350f; color: #fcd34d; }
+  </style>
+</head>
+<body>
+  <h1>Kritiq MAE Tester</h1>
+
+  <div class="config">
+    <label>Railway Server URL (no trailing slash)</label>
+    <input type="text" id="serverUrl" placeholder="https://your-app.up.railway.app" />
+  </div>
+
+  <!-- Health Check -->
+  <h2>1. Health Check</h2>
+  <div class="test-block">
+    <button onclick="testHealth()">Check Health</button>
+    <div id="health-status"></div>
+    <pre id="health-result"></pre>
+  </div>
+
+  <!-- FFmpeg Test -->
+  <h2>2. FFmpeg Test</h2>
+  <div class="test-block">
+    <input type="file" id="ffmpeg-file" accept="video/*,audio/*" />
+    <button onclick="testEndpoint('test-ffmpeg', 'ffmpeg')">Test FFmpeg</button>
+    <div id="ffmpeg-status"></div>
+    <pre id="ffmpeg-result"></pre>
+  </div>
+
+  <!-- Replicate Demucs Test -->
+  <h2>3. Replicate Demucs Test</h2>
+  <div class="test-block">
+    <input type="file" id="replicate-file" accept="video/*,audio/*" />
+    <button onclick="testEndpoint('test-replicate', 'replicate')">Test Replicate Demucs</button>
+    <div id="replicate-status"></div>
+    <pre id="replicate-result"></pre>
+  </div>
+
+  <!-- Pitch Test -->
+  <h2>4. Librosa Pitch Test</h2>
+  <div class="test-block">
+    <input type="file" id="pitch-file" accept="video/*,audio/*" />
+    <button onclick="testEndpoint('test-pitch', 'pitch')">Test Pitch</button>
+    <div id="pitch-status"></div>
+    <pre id="pitch-result"></pre>
+  </div>
+
+  <!-- Full Analyze -->
+  <h2>5. Full Pipeline (/analyze)</h2>
+  <div class="test-block">
+    <input type="file" id="analyze-file" accept="video/*,audio/*" />
+    <button onclick="testEndpoint('analyze', 'analyze')">Run Full Analysis</button>
+    <div id="analyze-status"></div>
+    <pre id="analyze-result"></pre>
+  </div>
+
+  <script>
+    function getUrl() {
+      return document.getElementById('serverUrl').value.replace(/\/$/, '');
+    }
+
+    async function testHealth() {
+      const el = document.getElementById('health-result');
+      const st = document.getElementById('health-status');
+      st.innerHTML = '<span class="status loading">Checking...</span>';
+      try {
+        const res = await fetch(getUrl() + '/health');
+        const data = await res.json();
+        el.textContent = JSON.stringify(data, null, 2);
+        st.innerHTML = `<span class="status ${data.status === 'ok' ? 'ok' : 'error'}">${data.status}</span>`;
+      } catch (e) {
+        el.textContent = e.message;
+        st.innerHTML = '<span class="status error">FAILED</span>';
+      }
+    }
+
+    async function testEndpoint(endpoint, prefix) {
+      const fileInput = document.getElementById(prefix + '-file');
+      const el = document.getElementById(prefix + '-result');
+      const st = document.getElementById(prefix + '-status');
+
+      if (!fileInput.files.length) {
+        el.textContent = 'Please select a file first';
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+
+      st.innerHTML = '<span class="status loading">Processing... (may take 30-120s for Demucs)</span>';
+      el.textContent = '';
+
+      const start = Date.now();
+      try {
+        const res = await fetch(getUrl() + '/' + endpoint, {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await res.json();
+        const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+        el.textContent = JSON.stringify(data, null, 2);
+        st.innerHTML = `<span class="status ${data.status === 'ok' ? 'ok' : 'error'}">${data.status || 'error'} (${elapsed}s)</span>`;
+      } catch (e) {
+        const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+        el.textContent = e.message;
+        st.innerHTML = `<span class="status error">FAILED (${elapsed}s)</span>`;
+      }
+    }
+  </script>
+</body>
+</html>
