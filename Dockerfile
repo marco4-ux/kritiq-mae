@@ -2,6 +2,7 @@ FROM python:3.11-slim
 
 # Install FFmpeg and libsndfile (for soundfile/librosa)
 RUN apt-get update && apt-get install -y ffmpeg libsndfile1 && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir yt-dlp
 
 WORKDIR /app
 
