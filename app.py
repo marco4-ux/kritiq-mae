@@ -422,14 +422,22 @@ def analyze_stem(wav_path):
     onset_frames = librosa.onset.onset_detect(y=y, sr=sr, hop_length=512)
     onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=512)
     
-    # Timing regularity: std of inter-onset intervals (lower = more consistent)
-    if len(onset_times) > 1:
+    # BPM: use librosa's beat tracker, not onset intervals
+    # beat_track is designed for actual tempo detection and handles
+    # arpeggiated/fingerpicked playing correctly
+    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=512)
+    avg_bpm = round(float(tempo) if not hasattr(tempo, '__len__') else float(tempo[0]), 1)
+    
+    # Timing regularity: std of inter-beat intervals (not inter-onset)
+    if len(beat_frames) > 1:
+        beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=512)
+        beat_intervals = np.diff(beat_times)
+        timing_consistency = round(1.0 - min(float(np.std(beat_intervals) / (np.mean(beat_intervals) + 1e-6)), 1.0), 3)
+    elif len(onset_times) > 1:
         intervals = np.diff(onset_times)
         timing_consistency = round(1.0 - min(float(np.std(intervals) / (np.mean(intervals) + 1e-6)), 1.0), 3)
-        avg_bpm = round(60.0 / float(np.mean(intervals)), 1) if np.mean(intervals) > 0 else 0
     else:
         timing_consistency = 0.0
-        avg_bpm = 0
     
     # --- RMS energy (dynamics) ---
     rms = librosa.feature.rms(y=y, hop_length=512)[0]
