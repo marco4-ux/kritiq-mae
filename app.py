@@ -339,34 +339,19 @@ def analyze():
         stems_output, demucs_time = separate_stems_replicate(audio_url)
         t2 = time.time()
         
-        # Step 3: Download the "no_vocals" (instrument) stem for analysis
-        # Demucs output is typically a dict with stem name → URL
-        # or a list. We need to find the instrument stem.
-        logger.info(f"Step 3: Demucs output type: {type(stems_output)}, content: {stems_output}")
+        # Step 3: Parse Demucs output
+        # Actual format: {"bass": url, "drums": url, "other": url, "vocals": url, "guitar": null, "piano": null}
+        logger.info(f"Step 3: Demucs output: {stems_output}")
         
-        instrument_url = None
-        vocals_url = None
+        vocals_url = stems_output.get("vocals") if isinstance(stems_output, dict) else None
+        bass_url = stems_output.get("bass") if isinstance(stems_output, dict) else None
+        drums_url = stems_output.get("drums") if isinstance(stems_output, dict) else None
+        other_url = stems_output.get("other") if isinstance(stems_output, dict) else None
+        guitar_url = stems_output.get("guitar") if isinstance(stems_output, dict) else None
         
-        if isinstance(stems_output, dict):
-            # Dict with stem names as keys
-            instrument_url = stems_output.get("no_vocals") or stems_output.get("other") or stems_output.get("accompaniment")
-            vocals_url = stems_output.get("vocals")
-        elif isinstance(stems_output, list):
-            # List of URLs — typically [bass, drums, other, vocals] or similar
-            # We'll need to identify which is which by filename
-            for url in stems_output:
-                if isinstance(url, str):
-                    lower = url.lower()
-                    if "no_vocals" in lower or "other" in lower or "accompaniment" in lower:
-                        instrument_url = url
-                    elif "vocal" in lower:
-                        vocals_url = url
-            # Fallback: if we can't identify, use first non-vocal
-            if not instrument_url and stems_output:
-                instrument_url = stems_output[0] if not vocals_url or stems_output[0] != vocals_url else stems_output[-1]
-        elif isinstance(stems_output, str):
-            # Single URL — might be a zip or combined output
-            instrument_url = stems_output
+        # "other" is the instrument stem (everything not vocals/drums/bass)
+        # For guitar/piano covers, this is the primary analysis target
+        instrument_url = other_url
         
         if not instrument_url:
             return jsonify({
@@ -402,8 +387,11 @@ def analyze():
                 "total_seconds": round(t3 - t0, 2),
             },
             "stems": {
-                "instrument_url": instrument_url,
-                "vocals_url": vocals_url,
+                "vocals": vocals_url,
+                "bass": bass_url,
+                "drums": drums_url,
+                "other": other_url,
+                "guitar": guitar_url,
             },
             "analysis": metrics,
         })
