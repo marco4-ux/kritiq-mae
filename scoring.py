@@ -148,54 +148,51 @@ def _calibrate_to_10(raw_score: float) -> float:
 
 def _pitch_accuracy_strict(user: dict, ref: dict) -> float:
     """
-    Compare user's pitch sequence against reference.
-    Returns 0-1 score based on how many per-second pitches match.
+    Compare user's pitch distribution against reference.
+    Uses pitch class distribution similarity instead of per-second matching,
+    because the Deezer 30s preview covers a different section than the user's
+    performance — per-second comparison is meaningless.
+    
+    Also checks key match and relative pitch class usage.
     """
     user_pitches = user.get("pitches_per_second", [])
     ref_pitches = ref.get("pitches_per_second", [])
     
     if not user_pitches or not ref_pitches:
-        return 0.5  # can't compare, return neutral
-    
-    # Build lookup: time → note for reference
-    ref_notes = {}
-    for p in ref_pitches:
-        second = int(p["time"])
-        ref_notes[second] = p["note"]
-    
-    matches = 0
-    close_matches = 0
-    total = 0
-    
-    # Semitone distance helper
-    pitch_classes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-    
-    for p in user_pitches:
-        second = int(p["time"])
-        if second in ref_notes:
-            total += 1
-            user_note = p["note"]
-            ref_note = ref_notes[second]
-            
-            if user_note == ref_note:
-                matches += 1
-            else:
-                # Check if within 1 semitone (close but not exact)
-                try:
-                    user_idx = pitch_classes.index(user_note)
-                    ref_idx = pitch_classes.index(ref_note)
-                    distance = min(abs(user_idx - ref_idx), 12 - abs(user_idx - ref_idx))
-                    if distance <= 1:
-                        close_matches += 1
-                except ValueError:
-                    pass
-    
-    if total == 0:
         return 0.5
     
-    # Exact matches count full, close matches count half
-    score = (matches + close_matches * 0.5) / total
-    return score
+    pitch_classes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+    
+    # Key match (most important — are they in the same key?)
+    user_key = user.get("detected_key", "")
+    ref_key = ref.get("detected_key", "")
+    
+    if user_key == ref_key:
+        key_score = 1.0
+    else:
+        try:
+            u_idx = pitch_classes.index(user_key)
+            r_idx = pitch_classes.index(ref_key)
+            distance = min(abs(u_idx - r_idx), 12 - abs(u_idx - r_idx))
+            if distance <= 1:
+                key_score = 0.85  # one semitone off — close
+            elif distance in (5, 7):
+                key_score = 0.7   # related key (fourth/fifth)
+            else:
+                key_score = max(0.2, 1.0 - distance * 0.08)
+        except ValueError:
+            key_score = 0.5
+    
+    # Pitch distribution similarity (cosine similarity of note usage)
+    user_notes = [p["note"] for p in user_pitches]
+    ref_notes = [p["note"] for p in ref_pitches]
+    
+    user_dist = _pitch_distribution(user_notes)
+    ref_dist = _pitch_distribution(ref_notes)
+    distribution_score = _cosine_similarity(user_dist, ref_dist)
+    
+    # Blend: 40% key match, 60% distribution similarity
+    return key_score * 0.4 + distribution_score * 0.6
 
 
 def _pitch_stability_creative(user: dict) -> float:
