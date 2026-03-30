@@ -68,6 +68,82 @@ def upload_for_replicate(file_path):
     
     raise RuntimeError(f"File too large for data URI ({file_size} bytes). Need external hosting.")
 
+# ─── Helper: Deezer reference lookup + analysis ──────────────────────
+
+def fetch_deezer_reference(song_title: str, song_artist: str) -> dict:
+    """
+    Search Deezer for a song, download the 30s preview, run Librosa on it.
+    Returns {"track": {...}, "analysis": {...}} or None if not found.
+    Results should be cached in Supabase (songs table) after first lookup.
+    """
+    query = f"{song_title} {song_artist}".strip()
+    if not query:
+        return None
+    
+    try:
+        # Step 1: Search Deezer
+        logger.info(f"Deezer reference lookup: {query}")
+        search_resp = http_requests.get(
+            "https://api.deezer.com/search",
+            params={"q": query},
+            timeout=15,
+        )
+        search_resp.raise_for_status()
+        search_data = search_resp.json()
+        
+        if not search_data.get("data"):
+            logger.info(f"No Deezer results for: {query}")
+            return None
+        
+        track = search_data["data"][0]
+        preview_url = track.get("preview")
+        if not preview_url:
+            logger.info(f"Deezer track found but no preview URL")
+            return None
+        
+        track_info = {
+            "title": track.get("title"),
+            "artist": track.get("artist", {}).get("name"),
+            "album": track.get("album", {}).get("title"),
+            "deezer_id": track.get("id"),
+            "duration": track.get("duration"),
+            "preview_url": preview_url,
+        }
+        
+        # Step 2: Download 30s preview
+        dl_resp = http_requests.get(preview_url, timeout=30)
+        dl_resp.raise_for_status()
+        
+        preview_path = tempfile.mktemp(suffix=".mp3")
+        with open(preview_path, "wb") as f:
+            f.write(dl_resp.content)
+        
+        # Step 3: Convert to WAV and analyze
+        wav_path = preview_path + ".wav"
+        subprocess.run(
+            ["ffmpeg", "-i", preview_path, "-ar", "22050", "-ac", "1", "-y", wav_path],
+            capture_output=True, text=True, timeout=30,
+        )
+        
+        ref_analysis = analyze_stem(wav_path)
+        
+        # Cleanup
+        if os.path.exists(preview_path):
+            os.unlink(preview_path)
+        if os.path.exists(wav_path):
+            os.unlink(wav_path)
+        
+        logger.info(f"Deezer reference ready: {track_info['title']} by {track_info['artist']} — key: {ref_analysis.get('detected_key')}")
+        
+        return {
+            "track": track_info,
+            "analysis": ref_analysis,
+        }
+    
+    except Exception as e:
+        logger.warning(f"Deezer reference lookup failed: {e}")
+        return None
+
 # ─── Helper: Call Replicate Demucs API ───────────────────────────────
 
 def separate_stems_replicate(audio_url):
@@ -564,12 +640,26 @@ def analyze():
         logger.info("Step 6: Calculating scores...")
         from scoring import calculate_scores
         
-        # Get reference mode and optional reference data from request
+        # Get reference mode from request
         ref_mode = request.form.get("reference_weighting", "creative").lower()
+        song_title = request.form.get("song_title", "")
+        song_artist = request.form.get("song_artist", "")
         
-        # TODO: look up Deezer reference from Supabase cache by song_id
-        # For now, score in creative mode only
-        scores = calculate_scores(metrics, reference_analysis=None, mode=ref_mode)
+        # If strict mode and song info provided, fetch Deezer reference
+        reference_analysis = None
+        reference_track = None
+        if ref_mode == "strict" and song_title:
+            logger.info("Fetching Deezer reference for strict mode scoring...")
+            deezer_ref = fetch_deezer_reference(song_title, song_artist)
+            if deezer_ref:
+                reference_analysis = deezer_ref["analysis"]
+                reference_track = deezer_ref["track"]
+                logger.info(f"Reference found: {reference_track['title']} — key: {reference_analysis.get('detected_key')}")
+            else:
+                logger.info("No Deezer reference found, falling back to creative mode")
+                ref_mode = "creative"
+        
+        scores = calculate_scores(metrics, reference_analysis=reference_analysis, mode=ref_mode)
         t4 = time.time()
         
         # Step 7: Generate Claude feedback (optional — skip if no API key)
@@ -618,6 +708,11 @@ def analyze():
             },
             "analysis": metrics,
             "scores": scores,
+            "reference": {
+                "track": reference_track,
+                "key": reference_analysis.get("detected_key") if reference_analysis else None,
+                "source": "deezer" if reference_track else None,
+            } if reference_track else None,
             "feedback": feedback,
         })
     
