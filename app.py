@@ -16,6 +16,9 @@ REPLICATE_API_TOKEN = os.environ.get("REPLICATE_API_TOKEN", "")
 REPLICATE_MODEL = "cjwbw/demucs"
 REPLICATE_VERSION = "25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953"
 
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
@@ -142,6 +145,97 @@ def fetch_deezer_reference(song_title: str, song_artist: str) -> dict:
     
     except Exception as e:
         logger.warning(f"Deezer reference lookup failed: {e}")
+        return None
+
+# ─── Helper: Supabase operations ─────────────────────────────────────
+
+def _supabase_headers():
+    return {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+
+def get_cached_reference(song_title: str, song_artist: str) -> dict:
+    """Look up cached song reference from Supabase. Returns analysis dict or None."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return None
+    
+    try:
+        resp = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/songs",
+            headers=_supabase_headers(),
+            params={
+                "title": f"eq.{song_title}",
+                "artist": f"eq.{song_artist}",
+                "select": "id,reference_analysis,deezer_id",
+                "limit": "1",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        
+        if rows and rows[0].get("reference_analysis"):
+            logger.info(f"Cache HIT: {song_title} by {song_artist}")
+            return rows[0]["reference_analysis"]
+        
+        logger.info(f"Cache MISS: {song_title} by {song_artist}")
+        return None
+    except Exception as e:
+        logger.warning(f"Supabase cache lookup failed: {e}")
+        return None
+
+def cache_song_reference(track_info: dict, reference_analysis: dict) -> None:
+    """Save song reference to Supabase for future lookups."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return
+    
+    try:
+        payload = {
+            "title": track_info.get("title", ""),
+            "artist": track_info.get("artist", ""),
+            "deezer_id": track_info.get("deezer_id"),
+            "deezer_preview_url": track_info.get("preview_url"),
+            "album": track_info.get("album"),
+            "duration_seconds": track_info.get("duration"),
+            "reference_analysis": json.dumps(reference_analysis) if isinstance(reference_analysis, dict) else reference_analysis,
+            "reference_source": "deezer",
+            "reference_analyzed_at": "now()",
+        }
+        
+        # Upsert — insert or update on conflict (title + artist unique constraint)
+        resp = http_requests.post(
+            f"{SUPABASE_URL}/rest/v1/songs",
+            headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates,return=representation"},
+            json=payload,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        logger.info(f"Cached reference: {track_info.get('title')} by {track_info.get('artist')}")
+    except Exception as e:
+        logger.warning(f"Supabase cache save failed: {e}")
+
+def save_submission(data: dict) -> str:
+    """Save a submission record to Supabase. Returns submission ID or None."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return None
+    
+    try:
+        resp = http_requests.post(
+            f"{SUPABASE_URL}/rest/v1/submissions",
+            headers=_supabase_headers(),
+            json=data,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if rows:
+            return rows[0].get("id")
+        return None
+    except Exception as e:
+        logger.warning(f"Supabase submission save failed: {e}")
         return None
 
 # ─── Helper: Call Replicate Demucs API ───────────────────────────────
@@ -645,19 +739,27 @@ def analyze():
         song_title = request.form.get("song_title", "")
         song_artist = request.form.get("song_artist", "")
         
-        # If strict mode and song info provided, fetch Deezer reference
+        # If strict mode and song info provided, look up reference
         reference_analysis = None
         reference_track = None
         if ref_mode == "strict" and song_title:
-            logger.info("Fetching Deezer reference for strict mode scoring...")
-            deezer_ref = fetch_deezer_reference(song_title, song_artist)
-            if deezer_ref:
-                reference_analysis = deezer_ref["analysis"]
-                reference_track = deezer_ref["track"]
-                logger.info(f"Reference found: {reference_track['title']} — key: {reference_analysis.get('detected_key')}")
+            # Step 6a: Check Supabase cache first
+            cached = get_cached_reference(song_title, song_artist)
+            if cached:
+                reference_analysis = cached
+                reference_track = {"title": song_title, "artist": song_artist, "source": "cache"}
             else:
-                logger.info("No Deezer reference found, falling back to creative mode")
-                ref_mode = "creative"
+                # Step 6b: Cache miss — fetch from Deezer, analyze, cache
+                logger.info("Fetching Deezer reference for strict mode scoring...")
+                deezer_ref = fetch_deezer_reference(song_title, song_artist)
+                if deezer_ref:
+                    reference_analysis = deezer_ref["analysis"]
+                    reference_track = deezer_ref["track"]
+                    # Cache for next time
+                    cache_song_reference(reference_track, reference_analysis)
+                else:
+                    logger.info("No Deezer reference found, falling back to creative mode")
+                    ref_mode = "creative"
         
         scores = calculate_scores(metrics, reference_analysis=reference_analysis, mode=ref_mode)
         t4 = time.time()
@@ -688,8 +790,40 @@ def analyze():
             )
         t5 = time.time()
         
+        # Step 8: Save submission to Supabase (non-blocking, don't fail pipeline if this fails)
+        submission_id = None
+        try:
+            submission_data = {
+                "skill_level": request.form.get("skill_level", "Intermediate"),
+                "harshness": request.form.get("harshness", "Supportive Producer"),
+                "style": request.form.get("style", "Original Style"),
+                "genre": request.form.get("genre"),
+                "environment": request.form.get("environment", "Bedroom Tape"),
+                "intentional_choices": request.form.get("intentional_choices"),
+                "influence": request.form.get("influence"),
+                "reference_weighting": ref_mode.capitalize(),
+                "stems": json.dumps({
+                    "vocals": vocals_url, "bass": bass_url,
+                    "drums": drums_url, "other": other_url, "guitar": guitar_url,
+                }),
+                "performance_analysis": json.dumps(metrics),
+                "scores": json.dumps(scores),
+                "feedback": json.dumps(feedback) if feedback else None,
+                "pipeline_timing": json.dumps({
+                    "ffmpeg": round(t1 - t0, 2), "demucs": round(t2 - t1, 2),
+                    "librosa": round(t3 - t2, 2), "scoring": round(t4 - t3, 2),
+                    "feedback": round(t5 - t4, 2), "total": round(t5 - t0, 2),
+                }),
+                "status": "completed",
+                "completed_at": "now()",
+            }
+            submission_id = save_submission(submission_data)
+        except Exception as e:
+            logger.warning(f"Failed to save submission: {e}")
+        
         return jsonify({
             "status": "ok",
+            "submission_id": submission_id,
             "pipeline_timing": {
                 "ffmpeg_seconds": round(t1 - t0, 2),
                 "demucs_seconds": round(t2 - t1, 2),
