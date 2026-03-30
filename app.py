@@ -36,6 +36,73 @@ def health():
         "replicate_configured": bool(REPLICATE_API_TOKEN),
     })
 
+@app.route("/warmup", methods=["GET", "POST"])
+def warmup():
+    """
+    Pre-warm the Replicate Demucs GPU.
+    Call this when the user opens the submission form — by the time they
+    fill in fields and hit submit, the GPU will be warm and ready.
+    Returns immediately after sending the request (doesn't wait for result).
+    """
+    if not REPLICATE_API_TOKEN:
+        return jsonify({"status": "error", "message": "REPLICATE_API_TOKEN not set"}), 500
+    
+    try:
+        import base64
+        import struct
+        import io
+        
+        # Generate a 1-second silent WAV in memory (smallest valid audio)
+        sample_rate = 8000
+        num_samples = sample_rate  # 1 second
+        wav_buf = io.BytesIO()
+        # WAV header
+        data_size = num_samples * 2  # 16-bit mono
+        wav_buf.write(b'RIFF')
+        wav_buf.write(struct.pack('<I', 36 + data_size))
+        wav_buf.write(b'WAVE')
+        wav_buf.write(b'fmt ')
+        wav_buf.write(struct.pack('<IHHIIHH', 16, 1, 1, sample_rate, sample_rate * 2, 2, 16))
+        wav_buf.write(b'data')
+        wav_buf.write(struct.pack('<I', data_size))
+        wav_buf.write(b'\x00' * data_size)  # silence
+        
+        audio_data = base64.b64encode(wav_buf.getvalue()).decode("utf-8")
+        audio_url = f"data:audio/wav;base64,{audio_data}"
+        
+        # Send async prediction (don't wait for result — just wake up the GPU)
+        headers = {
+            "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "version": REPLICATE_VERSION,
+            "input": {
+                "audio": audio_url,
+                "model_name": "htdemucs",
+            }
+        }
+        
+        resp = http_requests.post(
+            "https://api.replicate.com/v1/predictions",
+            headers=headers,
+            json=payload,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        prediction = resp.json()
+        
+        return jsonify({
+            "status": "ok",
+            "message": "Warmup request sent — GPU will be ready in ~30-60s",
+            "prediction_id": prediction.get("id"),
+            "prediction_status": prediction.get("status"),
+        })
+    
+    except Exception as e:
+        logger.exception("Warmup failed")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 # ─── Helper: Extract audio from video via FFmpeg ─────────────────────
 
 def extract_audio(input_path, sr=44100, mono=True, max_duration=None):
@@ -685,9 +752,9 @@ def analyze():
     try:
         t0 = time.time()
         
-        # Step 1: Extract audio
-        logger.info("Step 1: Extracting audio with FFmpeg...")
-        wav_path = extract_audio(input_path, sr=44100, mono=False)
+        # Step 1: Extract audio (capped at 60s — enough for full scoring, keeps Demucs fast)
+        logger.info("Step 1: Extracting audio with FFmpeg (max 60s)...")
+        wav_path = extract_audio(input_path, sr=44100, mono=False, max_duration=60)
         temp_files.append(wav_path)
         t1 = time.time()
         
