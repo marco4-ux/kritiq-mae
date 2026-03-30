@@ -836,11 +836,18 @@ def analyze():
         scores = calculate_scores(metrics, reference_analysis=reference_analysis, mode=ref_mode)
         t4 = time.time()
         
-        # Step 7: Generate Claude feedback (optional — skip if no API key)
+        # Step 7: Visual analysis via Claude Vision (runs on original video, not audio)
+        visual_analysis = None
+        from visual import analyze_video
+        logger.info("Step 7: Running visual analysis on video frames...")
+        visual_analysis = analyze_video(input_path)
+        t_visual = time.time()
+        
+        # Step 8: Generate Claude feedback (optional — skip if no API key)
         feedback = None
         from feedback import generate_feedback, ANTHROPIC_API_KEY as _ak
         if _ak:
-            logger.info("Step 7: Generating Claude feedback...")
+            logger.info("Step 8: Generating Claude feedback...")
             song_context = {
                 "title": request.form.get("song_title", "Unknown"),
                 "artist": request.form.get("song_artist", "Unknown"),
@@ -859,10 +866,11 @@ def analyze():
                 analysis=metrics,
                 song_context=song_context,
                 artist_context=artist_context,
+                visual_analysis=visual_analysis,
             )
         t5 = time.time()
         
-        # Step 8: Save submission to Supabase (non-blocking, don't fail pipeline if this fails)
+        # Step 9: Save submission to Supabase (non-blocking, don't fail pipeline if this fails)
         submission_id = None
         try:
             from datetime import datetime, timezone
@@ -882,10 +890,12 @@ def analyze():
                 "performance_analysis": metrics,
                 "scores": scores,
                 "feedback": feedback,
+                "visual_analysis": visual_analysis,
                 "pipeline_timing": {
                     "ffmpeg": round(t1 - t0, 2), "demucs": round(t2 - t1, 2),
                     "librosa": round(t3 - t2, 2), "scoring": round(t4 - t3, 2),
-                    "feedback": round(t5 - t4, 2), "total": round(t5 - t0, 2),
+                    "visual": round(t_visual - t4, 2), "feedback": round(t5 - t_visual, 2),
+                    "total": round(t5 - t0, 2),
                 },
                 "status": "completed",
                 "completed_at": datetime.now(timezone.utc).isoformat(),
@@ -903,7 +913,8 @@ def analyze():
                 "demucs_predict_seconds": round(demucs_time, 2),
                 "librosa_seconds": round(t3 - t2, 2),
                 "scoring_seconds": round(t4 - t3, 2),
-                "feedback_seconds": round(t5 - t4, 2),
+                "visual_seconds": round(t_visual - t4, 2),
+                "feedback_seconds": round(t5 - t_visual, 2),
                 "total_seconds": round(t5 - t0, 2),
             },
             "stems": {
@@ -920,6 +931,7 @@ def analyze():
                 "key": reference_analysis.get("detected_key") if reference_analysis else None,
                 "source": "deezer" if reference_track else None,
             } if reference_track else None,
+            "visual_analysis": visual_analysis,
             "feedback": feedback,
         })
     
