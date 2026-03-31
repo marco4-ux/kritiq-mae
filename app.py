@@ -956,6 +956,7 @@ def analyze():
                 "skill_level": request.form.get("skill_level", "Intermediate"),
                 "harshness": request.form.get("harshness", "Supportive Producer"),
                 "instrument": instrument,
+                "capo": request.form.get("capo", "none"),
                 "style": request.form.get("style", "Original Style"),
                 "genre": request.form.get("genre", ""),
                 "environment": request.form.get("environment", "Bedroom Tape"),
