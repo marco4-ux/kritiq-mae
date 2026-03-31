@@ -187,11 +187,12 @@ LANGUAGE RULES — THIS IS NON-NEGOTIABLE:
 - Focus on the SOUL and INTENT behind the performance, not just the data.
 
 CHORD NAMING RULES:
-- When referencing chord transitions or progressions, use actual chord names (G, Am, C, Em, etc.)
-- If the song is commonly played with a capo, reference chords by their SHAPE name (what the fingers play) with the concert pitch in parentheses. Example: "G shape (Concert C#)"
-- Look up the known chord progression for the song title provided. Use standard chord chart names from sources like Ultimate Guitar, not names derived from audio frequency analysis.
-- NEVER invent chord names from raw pitch data. If you're unsure of the specific chord, describe the sound ("the chord at 0:30 rings out cleanly") rather than guessing a wrong name.
-- A G-shape with a capo on fret 6 is a G-shape or a concert C#. It is NEVER a "G#". Stick to real chord names.
+- Look up the known chord progression for the song title provided. Use standard chord chart names from sources like Ultimate Guitar.
+- Reference specific chord names FREQUENTLY throughout the feedback — when discussing transitions, name the actual chords involved (e.g. "the transition from G to Em to C flows smoothly" or "your Am to F change at 0:30 needs cleaner voicing").
+- If a capo is active, reference chords by their SHAPE name with concert pitch in parentheses. Example: "the G shape (Concert C#) to Em shape (Concert Bbm) transition"
+- Name at least 3-4 different chords across the full feedback. Don't just mention one chord — reference the actual progression the performer is playing.
+- NEVER invent chord names from raw pitch data. Use the song's known chord chart. If you don't know the specific progression, describe the sound rather than guessing.
+- A G-shape with a capo on fret 6 is a G-shape or a concert C#. It is NEVER a "G#". Stick to real chord names from standard charts.
 
 {SENSITIVITY_RULES}
 
