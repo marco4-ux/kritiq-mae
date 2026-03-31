@@ -271,14 +271,19 @@ def _build_user_prompt(
 - Spectral Rolloff: {tech_details.get('avg_spectral_rolloff', 'N/A')} Hz"""
 
     # Vocal-instrument coordination
-    if analysis.get("has_vocals"):
+    # Trust user's instrument selection over unreliable audio detection
+    instrument = artist_context.get("instrument", "")
+    user_says_vocals = "vocal" in instrument.lower()
+    has_vocals = user_says_vocals or analysis.get("has_vocals", False)
+    
+    if has_vocals:
         coord = analysis.get("coordination_score")
-        if coord is not None:
-            prompt += f"""
-- Vocals Detected: Yes
-- Vocal-Instrument Coordination: {coord} (1.0 = perfectly synchronized, 0.0 = completely independent)"""
+        coord_str = f" Coordination score: {coord}" if coord is not None else ""
+        prompt += f"""
+- Vocals Present: Yes — the performer is singing while playing.{coord_str}
+- IMPORTANT: Provide feedback on BOTH the vocal performance AND the instrumental performance. Comment on vocal pitch, phrasing, breath control, and how well the singing coordinates with the playing."""
     else:
-        prompt += "\n- Vocals Detected: No (instrumental only)"
+        prompt += "\n- Vocals Present: No (instrumental only)"
 
     # Notable pitch moments — spread across early, middle, and late sections
     pitches = analysis.get("pitches_per_second", [])
