@@ -160,11 +160,13 @@ def _analyze_frames(frame_paths: list, instrument: str = "") -> dict:
     prompt_text = f"Analyze these frames from a musician's cover performance video.{instrument_note}" + """
 
 Score their visual presence on a scale of 1-10 where:
-- 9-10: Professional stage presence, great framing, confident posture, engaging energy
-- 7-8: Strong presence, good setup, comfortable on camera
-- 5-6: Average, functional but not compelling visually  
-- 3-4: Below average, poor framing/lighting, uncomfortable energy
-- 1-2: Fundamental issues, barely visible, extremely poor setup
+- 9-10: Professional production — multiple camera angles OR intentional lighting OR studio/venue environment OR quality mic setup. Any two of these together = 9.0+.
+- 7-8: Good home setup — clean framing, decent lighting, comfortable on camera with some production thought.
+- 5-6: Basic — functional but minimal production effort, phone-on-shelf recording.
+- 3-4: Below average — poor framing/lighting, uncomfortable energy.
+- 1-2: Fundamental issues — barely visible, extremely poor setup.
+
+SCORING GUIDANCE: Most performers who have a dedicated recording setup with a visible microphone, intentional lighting, and clean framing should score 8.0+. If you see multiple camera angles, professional lighting rigs, or a studio/venue setting, score 9.0 or higher. Reserve scores below 7.0 for genuinely poor visual setups.
 
 Respond ONLY with valid JSON:
 {
