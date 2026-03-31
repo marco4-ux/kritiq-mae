@@ -160,13 +160,13 @@ def _analyze_frames(frame_paths: list, instrument: str = "") -> dict:
     prompt_text = f"Analyze these frames from a musician's cover performance video.{instrument_note}" + """
 
 Score their visual presence on a scale of 1-10 where:
-- 9-10: Professional production — multiple camera angles OR intentional lighting OR studio/venue environment OR quality mic setup. Any two of these together = 9.0+.
-- 7-8: Good home setup — clean framing, decent lighting, comfortable on camera with some production thought.
-- 5-6: Basic — functional but minimal production effort, phone-on-shelf recording.
-- 3-4: Below average — poor framing/lighting, uncomfortable energy.
-- 1-2: Fundamental issues — barely visible, extremely poor setup.
+- 9.0-10: Multiple camera angles, professional/intentional lighting, studio or venue environment, quality microphone visible. Score 9.0 if ANY TWO of these are present.
+- 8.0-8.9: Dedicated home setup with visible mic, intentional lighting, clean framing.
+- 6.0-7.9: Basic but functional — phone recording with some thought to framing.
+- 4.0-5.9: Minimal effort — poor lighting, awkward angle, cluttered background.
+- Below 4.0: Barely visible, extremely poor setup.
 
-SCORING GUIDANCE: Most performers who have a dedicated recording setup with a visible microphone, intentional lighting, and clean framing should score 8.0+. If you see multiple camera angles, professional lighting rigs, or a studio/venue setting, score 9.0 or higher. Reserve scores below 7.0 for genuinely poor visual setups.
+CRITICAL: If you see evidence of multiple camera angles across the frames (different shots/perspectives), the score MUST be 9.0 or higher. Multiple cameras = professional production, period. Do not score multi-camera setups below 9.0.
 
 Respond ONLY with valid JSON:
 {
