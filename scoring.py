@@ -345,21 +345,21 @@ def _dynamic_control(user: dict) -> float:
     if avg_rms < 0.005:
         rms_score = 0.2  # barely audible
     elif avg_rms < 0.01:
-        rms_score = 0.6  # quiet but present
+        rms_score = 0.65  # quiet but present
     elif avg_rms < 0.3:
-        rms_score = 0.85  # good controlled level
+        rms_score = 0.9  # good controlled level
     else:
         rms_score = 0.6  # possibly clipping
     
-    # Dynamic range score: some variation is good, flat is okay for studio recordings
+    # Dynamic range score: controlled variation is the goal
     if dynamic_range < 0.005:
         range_score = 0.3  # completely flat / dead signal
-    elif dynamic_range < 0.03:
-        range_score = 0.65  # minimal variation — controlled but limited
+    elif dynamic_range < 0.02:
+        range_score = 0.7  # very tight — controlled but limited
     elif dynamic_range < 0.15:
-        range_score = 0.85  # good expressive range
+        range_score = 0.9  # good expressive range
     elif dynamic_range < 0.4:
-        range_score = 0.75  # wide but potentially intentional
+        range_score = 0.8  # wide but potentially intentional
     else:
         range_score = 0.4  # chaotic volume swings
     
