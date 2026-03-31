@@ -252,7 +252,15 @@ def _build_user_prompt(
 - Skill Level: {artist_context.get('skill_level', 'Not specified')}
 - Style: {artist_context.get('style', 'Not specified')}
 - Genre: {artist_context.get('genre', 'Not specified')}
-- Environment: {artist_context.get('environment', 'Not specified')}"""
+- Environment: {artist_context.get('environment', 'Not specified')}
+- Capo Position: {artist_context.get('capo', 'none')}"""
+
+    capo = artist_context.get("capo", "none")
+    if capo and capo != "none":
+        prompt += f"""
+CAPO ACTIVE on Fret {capo}. You MUST reference all chords by their SHAPE name (relative to capo) followed by concert pitch in parentheses.
+Example: if capo is on fret 6 and the audio detects C#, the shape is G. Write "G shape (Concert C#)".
+NEVER split the difference — a G-shape on fret 6 is G or Concert C#, NEVER "G#"."""
 
     if artist_context.get("intentional_choices"):
         prompt += f"\n- Intentional Choices: {artist_context['intentional_choices']}"
