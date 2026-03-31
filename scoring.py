@@ -149,11 +149,10 @@ def _calibrate_to_10(raw_score: float) -> float:
 def _pitch_accuracy_strict(user: dict, ref: dict) -> float:
     """
     Compare user's pitch distribution against reference.
-    Uses pitch class distribution similarity instead of per-second matching,
-    because the Deezer 30s preview covers a different section than the user's
-    performance — per-second comparison is meaningless.
-    
-    Also checks key match and relative pitch class usage.
+    Uses pitch class distribution similarity with transposition alignment —
+    if the performer plays in a different key, we shift the distribution 
+    to match before comparing. This way intentional key changes don't 
+    get penalized.
     """
     user_pitches = user.get("pitches_per_second", [])
     ref_pitches = ref.get("pitches_per_second", [])
@@ -163,36 +162,45 @@ def _pitch_accuracy_strict(user: dict, ref: dict) -> float:
     
     pitch_classes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
     
-    # Key match (most important — are they in the same key?)
     user_key = user.get("detected_key", "")
     ref_key = ref.get("detected_key", "")
     
-    if user_key == ref_key:
-        key_score = 1.0
-    else:
-        try:
-            u_idx = pitch_classes.index(user_key)
-            r_idx = pitch_classes.index(ref_key)
-            distance = min(abs(u_idx - r_idx), 12 - abs(u_idx - r_idx))
-            if distance <= 1:
-                key_score = 0.85  # one semitone off — close
-            elif distance in (5, 7):
-                key_score = 0.7   # related key (fourth/fifth)
-            else:
-                key_score = max(0.2, 1.0 - distance * 0.08)
-        except ValueError:
-            key_score = 0.5
-    
-    # Pitch distribution similarity (cosine similarity of note usage)
     user_notes = [p["note"] for p in user_pitches]
     ref_notes = [p["note"] for p in ref_pitches]
     
     user_dist = _pitch_distribution(user_notes)
     ref_dist = _pitch_distribution(ref_notes)
-    distribution_score = _cosine_similarity(user_dist, ref_dist)
     
-    # Blend: 40% key match, 60% distribution similarity
-    return key_score * 0.4 + distribution_score * 0.6
+    # Direct distribution comparison (same key)
+    direct_score = _cosine_similarity(user_dist, ref_dist)
+    
+    # Transposition-aligned comparison: shift user distribution to best match reference
+    # This handles intentional key changes — the intervals/patterns should still match
+    best_shifted_score = direct_score
+    if user_key != ref_key:
+        for shift in range(1, 12):
+            shifted_dist = {}
+            for note, count in user_dist.items():
+                try:
+                    idx = pitch_classes.index(note)
+                    new_note = pitch_classes[(idx + shift) % 12]
+                    shifted_dist[new_note] = count
+                except ValueError:
+                    shifted_dist[note] = count
+            shifted_score = _cosine_similarity(shifted_dist, ref_dist)
+            if shifted_score > best_shifted_score:
+                best_shifted_score = shifted_score
+    
+    # Use the best score — either direct match or best transposition alignment
+    distribution_score = best_shifted_score
+    
+    # Key match bonus (small — same key is slightly better than transposed)
+    if user_key == ref_key:
+        key_bonus = 0.05
+    else:
+        key_bonus = 0.0
+    
+    return min(1.0, distribution_score + key_bonus)
 
 
 def _pitch_stability_creative(user: dict) -> float:
@@ -234,46 +242,47 @@ def _pitch_stability_creative(user: dict) -> float:
 
 def _chord_accuracy_strict(user: dict, ref: dict) -> float:
     """
-    Compare user's detected key and pitch distribution against reference.
+    Compare user's chord/pitch distribution against reference.
+    Uses transposition-aligned comparison so key changes don't tank the score.
     """
+    pitch_classes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+    
     user_key = user.get("detected_key", "")
     ref_key = ref.get("detected_key", "")
     
-    pitch_classes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-    
-    # Key match
-    if user_key == ref_key:
-        key_score = 1.0
-    else:
-        try:
-            u_idx = pitch_classes.index(user_key)
-            r_idx = pitch_classes.index(ref_key)
-            distance = min(abs(u_idx - r_idx), 12 - abs(u_idx - r_idx))
-            # Perfect fifth (7 semitones) or fourth (5) are closely related keys
-            if distance in (5, 7):
-                key_score = 0.7
-            elif distance in (2, 10):  # whole step
-                key_score = 0.5
-            else:
-                key_score = max(0.2, 1.0 - distance * 0.1)
-        except ValueError:
-            key_score = 0.5
-    
-    # Pitch distribution similarity
     user_pitches = [p["note"] for p in user.get("pitches_per_second", [])]
     ref_pitches = [p["note"] for p in ref.get("pitches_per_second", [])]
     
     if not user_pitches or not ref_pitches:
-        return key_score
+        return 0.5
     
-    # Compare pitch class distributions
     user_dist = _pitch_distribution(user_pitches)
     ref_dist = _pitch_distribution(ref_pitches)
     
-    # Cosine similarity between distributions
-    similarity = _cosine_similarity(user_dist, ref_dist)
+    # Direct comparison
+    direct_score = _cosine_similarity(user_dist, ref_dist)
     
-    return key_score * 0.5 + similarity * 0.5
+    # Transposition-aligned: shift user distribution to find best match
+    best_score = direct_score
+    if user_key != ref_key:
+        for shift in range(1, 12):
+            shifted_dist = {}
+            for note, count in user_dist.items():
+                try:
+                    idx = pitch_classes.index(note)
+                    new_note = pitch_classes[(idx + shift) % 12]
+                    shifted_dist[new_note] = count
+                except ValueError:
+                    shifted_dist[note] = count
+            shifted_score = _cosine_similarity(shifted_dist, ref_dist)
+            if shifted_score > best_score:
+                best_score = shifted_score
+    
+    # Small bonus for same key
+    if user_key == ref_key:
+        best_score = min(1.0, best_score + 0.05)
+    
+    return best_score
 
 
 def _chord_clarity_creative(user: dict) -> float:
