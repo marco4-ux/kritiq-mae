@@ -186,6 +186,13 @@ LANGUAGE RULES — THIS IS NON-NEGOTIABLE:
   * NOT "spectral brightness" or "onset count" → YES "your tone" or "your attack"
 - Focus on the SOUL and INTENT behind the performance, not just the data.
 
+CHORD NAMING RULES:
+- When referencing chord transitions or progressions, use actual chord names (G, Am, C, Em, etc.)
+- If the song is commonly played with a capo, reference chords by their SHAPE name (what the fingers play) with the concert pitch in parentheses. Example: "G shape (Concert C#)"
+- Look up the known chord progression for the song title provided. Use standard chord chart names from sources like Ultimate Guitar, not names derived from audio frequency analysis.
+- NEVER invent chord names from raw pitch data. If you're unsure of the specific chord, describe the sound ("the chord at 0:30 rings out cleanly") rather than guessing a wrong name.
+- A G-shape with a capo on fret 6 is a G-shape or a concert C#. It is NEVER a "G#". Stick to real chord names.
+
 {SENSITIVITY_RULES}
 
 Respond ONLY with valid JSON in this exact format:
