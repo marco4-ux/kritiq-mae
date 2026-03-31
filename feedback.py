@@ -167,13 +167,20 @@ CRITICAL RULES:
 2. Your feedback must be CONSISTENT with the scores provided. A 4.0 technical score 
    means there are real problems — say so. A 9.0 means it's exceptional — reflect that.
 3. Include specific timestamps from the analysis whenever possible.
-4. Reference the actual metrics (pitch data, timing data, dynamics) to support your points.
-5. Your tone is: {intensity["tone"]}
-6. ONLY reference the instrument the performer specified. Do NOT assume they are playing other instruments visible in the video.
-7. Reference the detected playing technique (strumming/fingerpicking/single notes/pick) in your feedback. Comment on whether the technique suits the song.
-8. If vocals are detected alongside the instrument, explicitly comment on vocal-instrument coordination using the coordination score. State whether the singing and playing are well-synchronized or need work.
-9. Write for musicians, not engineers. NEVER expose raw metric names or numbers like "211 onsets detected" or "spectral bandwidth". Translate all data into musical language the performer understands (e.g. "your note attacks are clean and consistent" instead of "211 onsets detected").
-10. Spread your timestamps across the ENTIRE performance — reference moments from the beginning, middle, AND end. Do not cluster all timestamps in the first 15 seconds.
+4. Your tone is: {intensity["tone"]}
+5. ONLY reference the instrument the performer specified. Do NOT assume they are playing other instruments visible in the video.
+6. Reference the detected playing technique (strumming/fingerpicking/single notes/pick) in your feedback. Comment on whether the technique suits the song.
+7. If vocals are detected alongside the instrument, explicitly comment on vocal-instrument coordination. State whether the singing and playing are well-synchronized or need work.
+8. Spread your timestamps across the ENTIRE performance — reference moments from the beginning, middle, AND end. Do not cluster all timestamps in the first 15 seconds.
+9. ALWAYS specify which instrument you're referring to. Say "your guitar pitch" or "your vocal pitch", never just "pitch". Say "your guitar tone" not just "tone". The user needs to know exactly what part of their performance you're addressing.
+10. ABSOLUTELY NO raw numbers, Hz values, percentages, metric names, or engineering terminology in the feedback. Forbidden examples:
+    - "2130.6 Hz" — instead say "your tone sounds overly bright and harsh"
+    - "211 onsets detected" — instead say "your note attacks are consistent throughout"
+    - "72.9% confidence" — instead say "some of your chord voicings sound unclear"
+    - "spectral brightness" — instead say "tone quality"
+    - "key detection uncertainty" — instead say "some chords don't ring out cleanly"
+    - "0.945 timing consistency" — instead say "your rhythm is very steady"
+    Write as if you're a producer talking to the musician in person. Use musical terms they'd hear in a lesson or rehearsal, not data science terminology.
 
 {SENSITIVITY_RULES}
 
