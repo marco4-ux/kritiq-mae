@@ -221,15 +221,15 @@ def _pitch_stability_creative(user: dict) -> float:
     sorted_counts = sorted(note_counts.values(), reverse=True)
     
     # A strong performance in a key will have 3-5 dominant notes
-    # (tonic, third, fifth, seventh, maybe second)
     # Concentration ratio: how much of the total is in the top 4 notes
     top_4 = sum(sorted_counts[:4]) / total
     
-    # Also check: detected key confidence
+    # Key confidence as minor bonus, not major penalty
+    # Low key confidence often just means complex harmonics, not bad playing
     key_conf = user.get("key_confidence", 0.5)
+    key_bonus = min(key_conf * 0.15, 0.1)  # small bonus, max 0.1
     
-    # Blend: 60% concentration, 40% key confidence
-    return top_4 * 0.6 + key_conf * 0.4
+    return min(1.0, top_4 * 0.9 + key_bonus)
 
 
 # ─── Chord scoring ───────────────────────────────────────────────────
@@ -275,33 +275,34 @@ def _chord_accuracy_strict(user: dict, ref: dict) -> float:
 def _chord_clarity_creative(user: dict) -> float:
     """
     Creative mode: how clean and defined are the chord voicings?
-    Measured by chroma energy concentration — clear chords have
-    strong peaks at specific pitch classes, muddy playing has flat chroma.
+    Measured by pitch concentration — clear chords have strong peaks
+    at specific pitch classes, muddy playing has flat distribution.
     """
-    key_conf = user.get("key_confidence", 0.5)
-    
     pitches = user.get("pitches_per_second", [])
     if len(pitches) < 5:
         return 0.5
     
-    # Average confidence across detected pitches
-    # (In our current Librosa output this is always 1.0 due to argmax,
-    # but once we fix the confidence calculation this will be meaningful)
-    confidences = [p.get("confidence", 0.5) for p in pitches]
-    avg_confidence = sum(confidences) / len(confidences)
-    
-    # For now, use key confidence + pitch concentration as proxy
     note_counts = {}
     for p in pitches:
         note_counts[p["note"]] = note_counts.get(p["note"], 0) + 1
     
     total = sum(note_counts.values())
+    if total == 0:
+        return 0.5
+    
     sorted_counts = sorted(note_counts.values(), reverse=True)
     
-    # Ratio of top note to total (strong tonic presence = clearer chords)
-    top_ratio = sorted_counts[0] / total if total > 0 else 0
+    # Top note dominance (strong tonic presence = clearer chords)
+    top_ratio = sorted_counts[0] / total
     
-    return key_conf * 0.5 + top_ratio * 0.3 + min(avg_confidence, 1.0) * 0.2
+    # Top 3 concentration (clear chord voicings use 3-4 related notes)
+    top_3 = sum(sorted_counts[:3]) / total
+    
+    # Key confidence as minor bonus only
+    key_conf = user.get("key_confidence", 0.5)
+    key_bonus = min(key_conf * 0.1, 0.08)
+    
+    return min(1.0, top_ratio * 0.3 + top_3 * 0.6 + key_bonus)
 
 
 # ─── Timing scoring ──────────────────────────────────────────────────
