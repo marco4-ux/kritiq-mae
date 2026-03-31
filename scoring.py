@@ -200,10 +200,10 @@ def _pitch_accuracy_strict(user: dict, ref: dict) -> float:
 def _pitch_stability_creative(user: dict) -> float:
     """
     Creative mode: how stable/intentional is the pitch within the performance?
-    Measures consistency of the dominant pitch class distribution.
     
-    Uses top 5 notes (not top 4) to account for vocal+guitar performances
-    where both contribute pitch classes. Corroborates with timing.
+    In creative mode we're measuring internal consistency, not reference matching.
+    A vocal+guitar performance naturally uses 7-8 pitch classes (chord tones + melody).
+    Using top 7 captures all intentional notes without penalizing harmonic richness.
     """
     pitches = user.get("pitches_per_second", [])
     if len(pitches) < 5:
@@ -220,13 +220,18 @@ def _pitch_stability_creative(user: dict) -> float:
     
     sorted_counts = sorted(note_counts.values(), reverse=True)
     
-    # Top 5 concentration — vocals + guitar naturally use more pitch classes
-    top_5 = sum(sorted_counts[:5]) / total
+    # Top 7 concentration — vocal+guitar uses many pitch classes intentionally
+    top_n = min(7, len(sorted_counts))
+    top_concentration = sum(sorted_counts[:top_n]) / total
     
-    # Corroborating: strong timing implies controlled, intentional pitch choices
+    # Timing as strong corroboration — consistent timing = intentional pitch choices
     timing = user.get("timing_consistency", 0.5)
     
-    return min(1.0, top_5 * 0.7 + timing * 0.3)
+    # Tonal clarity bonus
+    brightness = user.get("avg_brightness", 1500)
+    tone_bonus = 0.05 if 800 < brightness < 4000 else 0.0
+    
+    return min(1.0, top_concentration * 0.6 + timing * 0.35 + tone_bonus)
 
 
 # ─── Chord scoring ───────────────────────────────────────────────────
@@ -273,12 +278,9 @@ def _chord_clarity_creative(user: dict) -> float:
     """
     Creative mode: how clean and defined are the chord voicings?
     
-    Primary signal: pitch concentration in top notes.
-    Corroborating signals: tonal clarity (brightness in sweet spot) and 
-    timing consistency (steady timing implies controlled chord changes).
-    
-    When vocals are mixed with guitar, chroma distribution flattens out
-    even when chords are clean. Use corroborating metrics to compensate.
+    In creative mode, we measure internal harmonic clarity.
+    Strong timing + clean tone = clean chords. Use corroborating metrics
+    heavily since chroma distribution is unreliable with vocals mixed in.
     """
     pitches = user.get("pitches_per_second", [])
     if len(pitches) < 5:
@@ -294,30 +296,18 @@ def _chord_clarity_creative(user: dict) -> float:
     
     sorted_counts = sorted(note_counts.values(), reverse=True)
     
-    # Pitch concentration
-    top_3 = sum(sorted_counts[:3]) / total
-    top_5 = sum(sorted_counts[:5]) / total
+    # Top 7 concentration — same logic as pitch stability
+    top_n = min(7, len(sorted_counts))
+    concentration = sum(sorted_counts[:top_n]) / total
     
-    # Use top 5 instead of top 3 — vocals add extra pitch classes
-    # that don't indicate muddy chords
-    concentration_score = top_5
-    
-    # Corroborating: if timing is strong, chords are likely clean
+    # Timing as strong corroboration
     timing = user.get("timing_consistency", 0.5)
     
-    # Corroborating: tonal clarity from spectral analysis
+    # Tonal clarity
     brightness = user.get("avg_brightness", 1500)
-    if 800 < brightness < 4000:
-        tone_score = 0.85
-    elif 500 < brightness < 5000:
-        tone_score = 0.6
-    else:
-        tone_score = 0.4
+    tone_score = 0.9 if 800 < brightness < 4000 else 0.5
     
-    # Blend: concentration is primary, but timing and tone lift the floor
-    raw = concentration_score * 0.5 + timing * 0.3 + tone_score * 0.2
-    
-    return min(1.0, raw)
+    return min(1.0, concentration * 0.4 + timing * 0.4 + tone_score * 0.2)
 
 
 # ─── Timing scoring ──────────────────────────────────────────────────
