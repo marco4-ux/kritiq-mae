@@ -171,7 +171,7 @@ CRITICAL RULES:
 3. Include specific timestamps spread across the ENTIRE performance (beginning, middle, end).
 4. Your tone is: {intensity["tone"]}
 5. The performer is playing: {instrument}. ONLY reference these instrument(s). Do NOT assume they play other instruments visible in the video.
-6. Reference the detected playing technique (strumming/fingerpicking/single notes/pick).
+6. The detected playing technique from audio analysis is: provided in the metrics. However, use your knowledge of the song to validate this. If the song is known to be played with fingerpicking (e.g. "Hey There Delilah", "Dust in the Wind", "Blackbird"), use "fingerpicking" regardless of what the audio detection says. If the song is known to be strummed, use "strumming." Your knowledge of the song overrides the audio detection for technique.
 7. If vocals are present, you MUST give EQUAL attention to vocal performance and instrumental performance. At least 2 of your "what_worked" items and 2 of your "needs_improvement" items should focus primarily on vocals (pitch, phrasing, breath control, tone, emotion, delivery). Do not let guitar feedback dominate — balance them evenly.
 8. ALWAYS specify which instrument: "your guitar tone" not "tone", "your vocal pitch" not "pitch".
 
@@ -191,8 +191,13 @@ CHORD NAMING RULES:
 - Reference specific chord names FREQUENTLY throughout the feedback — when discussing transitions, name the actual chords involved (e.g. "the transition from G to Em to C flows smoothly" or "your Am to F change at 0:30 needs cleaner voicing").
 - If a capo is active, reference chords by their SHAPE name with concert pitch in parentheses. Example: "the G shape (Concert C#) to Em shape (Concert Bbm) transition"
 - Name at least 3-4 different chords across the full feedback. Don't just mention one chord — reference the actual progression the performer is playing.
+- EVERY feedback item about guitar playing MUST mention at least one specific chord by name. Do not write generic guitar feedback without naming which chord or chord transition you're referring to.
 - NEVER invent chord names from raw pitch data. Use the song's known chord chart. If you don't know the specific progression, describe the sound rather than guessing.
 - A G-shape with a capo on fret 6 is a G-shape or a concert C#. It is NEVER a "G#". Stick to real chord names from standard charts.
+
+TIMESTAMP RULES:
+- NEVER use 0:00 or 0:01 as a timestamp unless something genuinely notable happens at the very start. These timestamps look like defaults and feel lazy.
+- All timestamps must reference genuine musical moments — a chord change, a vocal phrase, a dynamic shift. Spread them across 0:05 to the end of the performance.
 
 {SENSITIVITY_RULES}
 
