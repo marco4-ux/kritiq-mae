@@ -448,6 +448,71 @@ def analyze_stem(wav_path):
     spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=512)[0]
     avg_brightness = round(float(np.mean(spectral_centroid)), 1)
     
+    # --- Technique identification ---
+    # Detect playing style from onset and spectral characteristics
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=512)
+    
+    # Strumming vs single note: strumming has wider spectral spread per onset
+    spectral_bandwidth = librosa.feature.spectral_bandwidth(y=y, sr=sr, hop_length=512)[0]
+    avg_bandwidth = float(np.mean(spectral_bandwidth))
+    
+    # Onset sharpness: picks have sharper attacks than fingers
+    if len(onset_frames) > 0:
+        onset_strengths = onset_env[onset_frames] if len(onset_frames) <= len(onset_env) else onset_env[:len(onset_frames)]
+        avg_onset_strength = float(np.mean(onset_strengths)) if len(onset_strengths) > 0 else 0
+    else:
+        avg_onset_strength = 0
+    
+    # Spectral rolloff: fingerpicking tends to have lower rolloff (warmer tone)
+    spectral_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr, hop_length=512)[0]
+    avg_rolloff = float(np.mean(spectral_rolloff))
+    
+    # Classify technique
+    # High bandwidth + high onset strength = strumming with pick
+    # High bandwidth + low onset strength = strumming with fingers
+    # Low bandwidth + high onset strength = single notes with pick
+    # Low bandwidth + low onset strength = fingerpicking
+    bandwidth_threshold = 1800  # Hz
+    strength_threshold = 1.5
+    
+    if avg_bandwidth > bandwidth_threshold:
+        if avg_onset_strength > strength_threshold:
+            technique = "strumming (pick)"
+        else:
+            technique = "strumming (fingers)"
+    else:
+        if avg_onset_strength > strength_threshold:
+            technique = "single notes (pick)"
+        else:
+            technique = "fingerpicking"
+    
+    # --- Vocal presence detection ---
+    # Use spectral features to detect vocal-range energy (80Hz-1100Hz fundamental)
+    # and vocal formant presence
+    mel_spec = librosa.feature.melspectrogram(y=y, sr=sr, hop_length=512, n_mels=128)
+    mel_db = librosa.power_to_db(mel_spec, ref=np.max)
+    
+    # Vocal range bins (approximate: 80-1100Hz maps to mel bins ~5-40 at sr=22050)
+    vocal_energy = np.mean(mel_db[5:40, :], axis=0)
+    instrument_energy = np.mean(mel_db[40:, :], axis=0)
+    
+    # Detect segments where vocal energy is prominent
+    vocal_ratio = float(np.mean(vocal_energy)) / (float(np.mean(instrument_energy)) + 1e-6)
+    has_vocals = vocal_ratio > 0.8  # vocals detected if ratio is high enough
+    
+    # Vocal-instrument coordination: compare onset timing patterns
+    # in vocal vs instrument frequency ranges
+    if has_vocals:
+        # Measure correlation between vocal and instrument energy over time
+        if len(vocal_energy) > 1 and len(instrument_energy) > 1:
+            min_len = min(len(vocal_energy), len(instrument_energy))
+            correlation = float(np.corrcoef(vocal_energy[:min_len], instrument_energy[:min_len])[0, 1])
+            coordination_score = round(max(0, min(1, (correlation + 1) / 2)), 3)  # normalize -1..1 to 0..1
+        else:
+            coordination_score = 0.5
+    else:
+        coordination_score = None  # no vocals detected
+    
     return {
         "duration_seconds": round(duration, 2),
         "detected_key": detected_key,
@@ -459,7 +524,15 @@ def analyze_stem(wav_path):
         "avg_rms": avg_rms,
         "dynamic_range": dynamic_range,
         "avg_brightness": avg_brightness,
-        "pitches_per_second": pitches_per_second[:60],  # cap at 60s
+        "pitches_per_second": pitches_per_second[:60],
+        "technique": technique,
+        "technique_details": {
+            "avg_spectral_bandwidth": round(avg_bandwidth, 1),
+            "avg_onset_strength": round(avg_onset_strength, 3),
+            "avg_spectral_rolloff": round(avg_rolloff, 1),
+        },
+        "has_vocals": has_vocals,
+        "coordination_score": coordination_score,
     }
 
 
