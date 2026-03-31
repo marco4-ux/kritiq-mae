@@ -172,6 +172,8 @@ CRITICAL RULES:
 6. ONLY reference the instrument the performer specified. Do NOT assume they are playing other instruments visible in the video.
 7. Reference the detected playing technique (strumming/fingerpicking/single notes/pick) in your feedback. Comment on whether the technique suits the song.
 8. If vocals are detected alongside the instrument, explicitly comment on vocal-instrument coordination using the coordination score. State whether the singing and playing are well-synchronized or need work.
+9. Write for musicians, not engineers. NEVER expose raw metric names or numbers like "211 onsets detected" or "spectral bandwidth". Translate all data into musical language the performer understands (e.g. "your note attacks are clean and consistent" instead of "211 onsets detected").
+10. Spread your timestamps across the ENTIRE performance — reference moments from the beginning, middle, AND end. Do not cluster all timestamps in the first 15 seconds.
 
 {SENSITIVITY_RULES}
 
@@ -271,17 +273,38 @@ def _build_user_prompt(
     else:
         prompt += "\n- Vocals Detected: No (instrumental only)"
 
-    # Notable pitch moments (first 20 for context)
-    pitches = analysis.get("pitches_per_second", [])[:20]
+    # Notable pitch moments — spread across early, middle, and late sections
+    pitches = analysis.get("pitches_per_second", [])
     if pitches:
-        pitch_str = ", ".join([f"{_seconds_to_mmss(p['time'])}:{p['note']}" for p in pitches])
-        prompt += f"\n- Pitch Timeline (first 20s): {pitch_str}"
+        total = len(pitches)
+        # Sample from beginning, middle, and end
+        early = pitches[:7]
+        mid_start = max(0, total // 2 - 3)
+        middle = pitches[mid_start:mid_start + 7]
+        late = pitches[max(0, total - 7):]
+        sampled = early + middle + late
+        # Deduplicate by time
+        seen_times = set()
+        unique = []
+        for p in sampled:
+            t = round(p['time'], 1)
+            if t not in seen_times:
+                seen_times.add(t)
+                unique.append(p)
+        pitch_str = ", ".join([f"{_seconds_to_mmss(p['time'])}:{p['note']}" for p in unique])
+        prompt += f"\n- Pitch Timeline (sampled across performance): {pitch_str}"
     
-    # Notable onset timestamps
-    onsets = analysis.get("onset_timestamps", [])[:20]
+    # Notable onset timestamps — spread across full performance
+    onsets = analysis.get("onset_timestamps", [])
     if onsets:
-        onset_mmss = [_seconds_to_mmss(t) for t in onsets]
-        prompt += f"\n- Onset Timestamps (first 20): {onset_mmss}"
+        total = len(onsets)
+        early = onsets[:5]
+        mid_start = max(0, total // 2 - 2)
+        middle = onsets[mid_start:mid_start + 5]
+        late = onsets[max(0, total - 5):]
+        sampled_onsets = sorted(set(early + middle + late))
+        onset_mmss = [_seconds_to_mmss(t) for t in sampled_onsets]
+        prompt += f"\n- Onset Timestamps (sampled across performance): {onset_mmss}"
 
     # Progress context (previous submission comparison)
     if progress_context and progress_context.get("previous_submissions", 0) > 0:
