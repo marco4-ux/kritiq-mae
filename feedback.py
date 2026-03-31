@@ -186,7 +186,16 @@ Respond ONLY with valid JSON in this exact format:
 
 Include 3-5 items in what_worked and 3-5 items in needs_improvement.
 Always include at least 2 timestamps in each section.
+Timestamps MUST be in mm:ss format (e.g. "0:23", "1:12", "2:05"). Never use decimal seconds.
 Do NOT include any text outside the JSON object."""
+
+
+def _seconds_to_mmss(seconds: float) -> str:
+    """Convert seconds (e.g. 4.99) to mm:ss format (e.g. '0:05')."""
+    total = int(round(seconds))
+    m = total // 60
+    s = total % 60
+    return f"{m}:{s:02d}"
 
 
 def _build_user_prompt(
@@ -244,13 +253,14 @@ def _build_user_prompt(
     # Notable pitch moments (first 20 for context)
     pitches = analysis.get("pitches_per_second", [])[:20]
     if pitches:
-        pitch_str = ", ".join([f"{p['time']}s:{p['note']}" for p in pitches])
+        pitch_str = ", ".join([f"{_seconds_to_mmss(p['time'])}:{p['note']}" for p in pitches])
         prompt += f"\n- Pitch Timeline (first 20s): {pitch_str}"
     
     # Notable onset timestamps
     onsets = analysis.get("onset_timestamps", [])[:20]
     if onsets:
-        prompt += f"\n- Onset Timestamps (first 20): {onsets}"
+        onset_mmss = [_seconds_to_mmss(t) for t in onsets]
+        prompt += f"\n- Onset Timestamps (first 20): {onset_mmss}"
 
     # Progress context (previous submission comparison)
     if progress_context and progress_context.get("previous_submissions", 0) > 0:
