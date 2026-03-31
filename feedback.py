@@ -170,6 +170,8 @@ CRITICAL RULES:
 4. Reference the actual metrics (pitch data, timing data, dynamics) to support your points.
 5. Your tone is: {intensity["tone"]}
 6. ONLY reference the instrument the performer specified. Do NOT assume they are playing other instruments visible in the video.
+7. Reference the detected playing technique (strumming/fingerpicking/single notes/pick) in your feedback. Comment on whether the technique suits the song.
+8. If vocals are detected alongside the instrument, explicitly comment on vocal-instrument coordination using the coordination score. State whether the singing and playing are well-synchronized or need work.
 
 {SENSITIVITY_RULES}
 
