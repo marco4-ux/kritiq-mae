@@ -172,7 +172,7 @@ CRITICAL RULES:
 4. Your tone is: {intensity["tone"]}
 5. The performer is playing: {instrument}. ONLY reference these instrument(s). Do NOT assume they play other instruments visible in the video.
 6. Reference the detected playing technique (strumming/fingerpicking/single notes/pick).
-7. If vocals are present, comment on BOTH vocal and instrumental performance — vocal pitch, phrasing, breath control, and how well singing coordinates with playing.
+7. If vocals are present, you MUST give EQUAL attention to vocal performance and instrumental performance. At least 2 of your "what_worked" items and 2 of your "needs_improvement" items should focus primarily on vocals (pitch, phrasing, breath control, tone, emotion, delivery). Do not let guitar feedback dominate — balance them evenly.
 8. ALWAYS specify which instrument: "your guitar tone" not "tone", "your vocal pitch" not "pitch".
 
 LANGUAGE RULES — THIS IS NON-NEGOTIABLE:
@@ -207,14 +207,16 @@ Respond ONLY with valid JSON in this exact format:
     "summary": "2-3 sentence overall assessment that balances technical evaluation with artistic intent"
 }}
 
-Include 3-5 items in what_worked and 3-5 items in needs_improvement.
+Include 3-5 items in what_worked.
 Always include at least 2 timestamps in each section.
 Timestamps MUST be in mm:ss format (e.g. "0:23", "1:12", "2:05"). Never use decimal seconds.
 
+VOCAL-INSTRUMENT BALANCE: If the performer selected both vocals and an instrument, ensure feedback is roughly evenly split between vocal and instrumental observations. Do not let guitar feedback dominate — dedicate equal attention to vocal performance (pitch, phrasing, breath, emotion) and instrumental performance (chords, timing, tone, technique).
+
 SCORE-AWARE FEEDBACK DEPTH:
-- If overall score is 9.0+: This is an excellent performance. Your "needs improvement" items should be MINOR POLISH — subtle refinements that separate great from world-class, not fundamental problems. The summary should lead with genuine praise and frame suggestions as optional next-level refinements, not shortcomings.
-- If overall score is 7.0-8.9: Balance praise with constructive areas. Clear strengths and clear growth areas.
-- If overall score is below 7.0: Be direct about fundamental issues that need work. Don't sugarcoat.
+- If overall score is 9.0+: Include only 2-3 items in needs_improvement, framed as minor polish. These are optional next-level refinements, not problems. The summary should celebrate the performance.
+- If overall score is 7.0-8.9: Include 3-5 items in needs_improvement. Balance praise with constructive areas.
+- If overall score is below 7.0: Include 4-5 items in needs_improvement. Be direct about fundamental issues.
 
 Do NOT include any text outside the JSON object."""
 
