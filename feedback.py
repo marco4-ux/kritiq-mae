@@ -248,7 +248,26 @@ def _build_user_prompt(
 - Onset Count: {analysis.get('onset_count', 'N/A')}
 - Average RMS: {analysis.get('avg_rms', 'N/A')}
 - Dynamic Range: {analysis.get('dynamic_range', 'N/A')}
-- Spectral Brightness: {analysis.get('avg_brightness', 'N/A')}"""
+- Spectral Brightness: {analysis.get('avg_brightness', 'N/A')}
+- Detected Technique: {analysis.get('technique', 'N/A')}"""
+
+    # Technique details
+    tech_details = analysis.get("technique_details")
+    if tech_details:
+        prompt += f"""
+- Spectral Bandwidth: {tech_details.get('avg_spectral_bandwidth', 'N/A')} Hz
+- Onset Strength: {tech_details.get('avg_onset_strength', 'N/A')}
+- Spectral Rolloff: {tech_details.get('avg_spectral_rolloff', 'N/A')} Hz"""
+
+    # Vocal-instrument coordination
+    if analysis.get("has_vocals"):
+        coord = analysis.get("coordination_score")
+        if coord is not None:
+            prompt += f"""
+- Vocals Detected: Yes
+- Vocal-Instrument Coordination: {coord} (1.0 = perfectly synchronized, 0.0 = completely independent)"""
+    else:
+        prompt += "\n- Vocals Detected: No (instrumental only)"
 
     # Notable pitch moments (first 20 for context)
     pitches = analysis.get("pitches_per_second", [])[:20]
