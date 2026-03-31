@@ -179,14 +179,8 @@ def _pitch_accuracy_strict(user: dict, ref: dict) -> float:
     best_shifted_score = direct_score
     if user_key != ref_key:
         for shift in range(1, 12):
-            shifted_dist = {}
-            for note, count in user_dist.items():
-                try:
-                    idx = pitch_classes.index(note)
-                    new_note = pitch_classes[(idx + shift) % 12]
-                    shifted_dist[new_note] = count
-                except ValueError:
-                    shifted_dist[note] = count
+            # Rotate the 12-element distribution list by 'shift' positions
+            shifted_dist = user_dist[shift:] + user_dist[:shift]
             shifted_score = _cosine_similarity(shifted_dist, ref_dist)
             if shifted_score > best_shifted_score:
                 best_shifted_score = shifted_score
@@ -266,14 +260,7 @@ def _chord_accuracy_strict(user: dict, ref: dict) -> float:
     best_score = direct_score
     if user_key != ref_key:
         for shift in range(1, 12):
-            shifted_dist = {}
-            for note, count in user_dist.items():
-                try:
-                    idx = pitch_classes.index(note)
-                    new_note = pitch_classes[(idx + shift) % 12]
-                    shifted_dist[new_note] = count
-                except ValueError:
-                    shifted_dist[note] = count
+            shifted_dist = user_dist[shift:] + user_dist[:shift]
             shifted_score = _cosine_similarity(shifted_dist, ref_dist)
             if shifted_score > best_score:
                 best_score = shifted_score
