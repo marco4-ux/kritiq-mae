@@ -210,6 +210,12 @@ Respond ONLY with valid JSON in this exact format:
 Include 3-5 items in what_worked and 3-5 items in needs_improvement.
 Always include at least 2 timestamps in each section.
 Timestamps MUST be in mm:ss format (e.g. "0:23", "1:12", "2:05"). Never use decimal seconds.
+
+SCORE-AWARE FEEDBACK DEPTH:
+- If overall score is 9.0+: This is an excellent performance. Your "needs improvement" items should be MINOR POLISH — subtle refinements that separate great from world-class, not fundamental problems. The summary should lead with genuine praise and frame suggestions as optional next-level refinements, not shortcomings.
+- If overall score is 7.0-8.9: Balance praise with constructive areas. Clear strengths and clear growth areas.
+- If overall score is below 7.0: Be direct about fundamental issues that need work. Don't sugarcoat.
+
 Do NOT include any text outside the JSON object."""
 
 
