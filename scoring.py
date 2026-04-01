@@ -66,15 +66,14 @@ def calculate_scores(
     # Ceiling: max score achievable at this skill level
     # Floor: minimum score — prevents unfair punishment of good performances
     # The score is compressed into [floor, ceiling] range
-    # 
-    # Example for Intermediate (floor=4.0, ceiling=8.5):
-    #   Raw 10.0 → 8.5 (capped)
-    #   Raw 7.0  → 6.9 (slight compression, not punishment)
-    #   Raw 3.0  → 4.0 (floored)
+    #
+    # Andy's calibration target: an intermediate player doing a simplified
+    # 45-second solo should max around 6.0-7.0, not 8.0+
+    # A near-perfect full-song intermediate rendition could hit the ceiling
     skill_ranges = {
-        "Beginner":      {"floor": 3.0, "ceiling": 7.5},
-        "Intermediate":  {"floor": 4.0, "ceiling": 8.5},
-        "Advanced":      {"floor": 5.0, "ceiling": 9.5},
+        "Beginner":      {"floor": 2.0, "ceiling": 6.0},
+        "Intermediate":  {"floor": 3.0, "ceiling": 7.0},
+        "Advanced":      {"floor": 4.0, "ceiling": 8.5},
         "Professional":  {"floor": 1.0, "ceiling": 10.0},
     }
     skill_range = skill_ranges.get(skill_level, skill_ranges["Intermediate"])
