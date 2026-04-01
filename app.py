@@ -932,7 +932,8 @@ def analyze():
                     logger.info("No Deezer reference found, falling back to creative mode")
                     ref_mode = "creative"
         
-        scores = calculate_scores(metrics, reference_analysis=reference_analysis, mode=ref_mode)
+        skill_level = request.form.get("skill_level", "Intermediate")
+        scores = calculate_scores(metrics, reference_analysis=reference_analysis, mode=ref_mode, skill_level=skill_level)
         t4 = time.time()
         
         # Step 7: Visual analysis via Claude Vision (runs on original video, not audio)
