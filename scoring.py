@@ -25,9 +25,16 @@ def calculate_scores(
     user_analysis: dict,
     reference_analysis: Optional[dict] = None,
     mode: str = "creative",  # "strict" or "creative"
+    skill_level: str = "Intermediate",
 ) -> dict:
     """
     Main entry point. Takes raw Librosa analysis dicts, returns scores.
+    
+    Skill level adjusts the final calibrated scores:
+    - Beginner: raw metrics scored as-is (easiest to impress)
+    - Intermediate: scores discounted ~10% (higher bar)
+    - Advanced: scores discounted ~15%
+    - Professional: scores discounted ~5% (expected to score high, small discount)
     
     Returns:
         {
@@ -55,41 +62,76 @@ def calculate_scores(
     dynamic_ctrl = _dynamic_control(user_analysis)
     tonal_clarity = _tonal_clarity(user_analysis)
     
+    # Skill level scoring adjustment
+    # Each skill level has a score ceiling (max achievable on the 1-10 scale)
+    # Scores are compressed into the range [1, ceiling]
+    # An intermediate player playing a simplified solo CAN'T score above their ceiling
+    skill_ceilings = {
+        "Beginner": 7.0,       # Max score for a beginner — best beginner tops out at 7.0
+        "Intermediate": 8.0,   # Max score for intermediate — exceptional intermediate = 8.0
+        "Advanced": 9.0,       # Max score for advanced — near world-class cap
+        "Professional": 10.0,  # No ceiling — professionals can hit 10
+    }
+    skill_ceiling = skill_ceilings.get(skill_level, 8.0)
+    
+    # Duration penalty — short clips show less of the song
+    # A 45-second simplified solo is not the same as a full 3-minute performance
+    duration = user_analysis.get("duration_seconds", 60)
+    if duration < 20:
+        duration_penalty = 0.80  # 20% penalty — barely a snippet
+    elif duration < 30:
+        duration_penalty = 0.85  # 15% penalty for very short clips
+    elif duration < 45:
+        duration_penalty = 0.92  # 8% penalty
+    else:
+        duration_penalty = 1.0   # no penalty for 45s+
+    
     # Technical score: weighted combination of pitch, timing, chords
     technical_raw = (
         pitch_acc * 0.40 +
         timing_con * 0.30 +
         chord_acc * 0.30
-    )
+    ) * duration_penalty
     
     # Emotional score: dynamics + tonal quality + timing feel
-    # Good dynamics and tone = emotional expressiveness
     emotional_raw = (
         dynamic_ctrl * 0.45 +
         tonal_clarity * 0.30 +
-        timing_con * 0.25  # timing also affects feel
-    )
+        timing_con * 0.25
+    ) * duration_penalty
     
     # Convert 0-1 raw scores to 1-10 scale with calibrated curve
     technical_score = _calibrate_to_10(technical_raw)
     emotional_score = _calibrate_to_10(emotional_raw)
     
+    # Apply skill ceiling — compress scores into [1, ceiling] range
+    # A score of 10.0 maps to the ceiling, 1.0 stays at 1.0
+    if skill_ceiling < 10.0:
+        technical_score = round(1.0 + (technical_score - 1.0) * (skill_ceiling - 1.0) / 9.0, 1)
+        emotional_score = round(1.0 + (emotional_score - 1.0) * (skill_ceiling - 1.0) / 9.0, 1)
+    
     # Overall: weighted blend
     overall_score = round(technical_score * 0.55 + emotional_score * 0.45, 1)
+    
+    # Also compress the raw metric percentages to match the ceiling
+    metric_scale = skill_ceiling / 10.0
     
     return {
         "overall": overall_score,
         "technical": technical_score,
         "emotional": emotional_score,
-        "pitch_accuracy": round(pitch_acc, 3),
-        "timing_consistency": round(timing_con, 3),
-        "chord_accuracy": round(chord_acc, 3),
-        "dynamic_control": round(dynamic_ctrl, 3),
-        "tonal_clarity": round(tonal_clarity, 3),
+        "pitch_accuracy": round(pitch_acc * metric_scale, 3),
+        "timing_consistency": round(timing_con * metric_scale, 3),
+        "chord_accuracy": round(chord_acc * metric_scale, 3),
+        "dynamic_control": round(dynamic_ctrl * metric_scale, 3),
+        "tonal_clarity": round(tonal_clarity * metric_scale, 3),
         "mode": mode,
+        "skill_level": skill_level,
         "score_breakdown": {
             "technical_raw": round(technical_raw, 3),
             "emotional_raw": round(emotional_raw, 3),
+            "skill_ceiling": skill_ceiling,
+            "duration_penalty": duration_penalty,
             "weights": {
                 "technical": {"pitch": 0.40, "timing": 0.30, "chords": 0.30},
                 "emotional": {"dynamics": 0.45, "tone": 0.30, "timing_feel": 0.25},
