@@ -62,17 +62,24 @@ def calculate_scores(
     dynamic_ctrl = _dynamic_control(user_analysis)
     tonal_clarity = _tonal_clarity(user_analysis)
     
-    # Skill level scoring adjustment
-    # Each skill level has a score ceiling (max achievable on the 1-10 scale)
-    # Scores are compressed into the range [1, ceiling]
-    # An intermediate player playing a simplified solo CAN'T score above their ceiling
-    skill_ceilings = {
-        "Beginner": 7.0,       # Max score for a beginner — best beginner tops out at 7.0
-        "Intermediate": 8.0,   # Max score for intermediate — exceptional intermediate = 8.0
-        "Advanced": 9.0,       # Max score for advanced — near world-class cap
-        "Professional": 10.0,  # No ceiling — professionals can hit 10
+    # Skill level scoring adjustment (Option D: ceiling + floor)
+    # Ceiling: max score achievable at this skill level
+    # Floor: minimum score — prevents unfair punishment of good performances
+    # The score is compressed into [floor, ceiling] range
+    # 
+    # Example for Intermediate (floor=4.0, ceiling=8.5):
+    #   Raw 10.0 → 8.5 (capped)
+    #   Raw 7.0  → 6.9 (slight compression, not punishment)
+    #   Raw 3.0  → 4.0 (floored)
+    skill_ranges = {
+        "Beginner":      {"floor": 3.0, "ceiling": 7.5},
+        "Intermediate":  {"floor": 4.0, "ceiling": 8.5},
+        "Advanced":      {"floor": 5.0, "ceiling": 9.5},
+        "Professional":  {"floor": 1.0, "ceiling": 10.0},
     }
-    skill_ceiling = skill_ceilings.get(skill_level, 8.0)
+    skill_range = skill_ranges.get(skill_level, skill_ranges["Intermediate"])
+    skill_floor = skill_range["floor"]
+    skill_ceiling = skill_range["ceiling"]
     
     # Duration penalty — short clips show less of the song
     # A 45-second simplified solo is not the same as a full 3-minute performance
@@ -104,32 +111,40 @@ def calculate_scores(
     technical_score = _calibrate_to_10(technical_raw)
     emotional_score = _calibrate_to_10(emotional_raw)
     
-    # Apply skill ceiling — compress scores into [1, ceiling] range
-    # A score of 10.0 maps to the ceiling, 1.0 stays at 1.0
-    if skill_ceiling < 10.0:
-        technical_score = round(1.0 + (technical_score - 1.0) * (skill_ceiling - 1.0) / 9.0, 1)
-        emotional_score = round(1.0 + (emotional_score - 1.0) * (skill_ceiling - 1.0) / 9.0, 1)
+    # Apply skill level range — compress scores into [floor, ceiling]
+    # Maps the 1-10 scale into the skill-appropriate range
+    def _apply_skill_range(score, floor, ceiling):
+        if ceiling >= 10.0 and floor <= 1.0:
+            return score  # Professional — no adjustment
+        # Linear map: 1.0 → floor, 10.0 → ceiling
+        adjusted = floor + (score - 1.0) * (ceiling - floor) / 9.0
+        return round(max(floor, min(ceiling, adjusted)), 1)
+    
+    technical_score = _apply_skill_range(technical_score, skill_floor, skill_ceiling)
+    emotional_score = _apply_skill_range(emotional_score, skill_floor, skill_ceiling)
     
     # Overall: weighted blend
     overall_score = round(technical_score * 0.55 + emotional_score * 0.45, 1)
     
-    # Also compress the raw metric percentages to match the ceiling
-    metric_scale = skill_ceiling / 10.0
+    # Scale metric percentages to match the range
+    range_scale = (skill_ceiling - skill_floor) / 9.0  # how compressed the range is
+    metric_midpoint = (skill_floor + skill_ceiling) / 20.0  # center of the range as 0-1
     
     return {
         "overall": overall_score,
         "technical": technical_score,
         "emotional": emotional_score,
-        "pitch_accuracy": round(pitch_acc * metric_scale, 3),
-        "timing_consistency": round(timing_con * metric_scale, 3),
-        "chord_accuracy": round(chord_acc * metric_scale, 3),
-        "dynamic_control": round(dynamic_ctrl * metric_scale, 3),
-        "tonal_clarity": round(tonal_clarity * metric_scale, 3),
+        "pitch_accuracy": round(pitch_acc * (skill_ceiling / 10.0), 3),
+        "timing_consistency": round(timing_con * (skill_ceiling / 10.0), 3),
+        "chord_accuracy": round(chord_acc * (skill_ceiling / 10.0), 3),
+        "dynamic_control": round(dynamic_ctrl * (skill_ceiling / 10.0), 3),
+        "tonal_clarity": round(tonal_clarity * (skill_ceiling / 10.0), 3),
         "mode": mode,
         "skill_level": skill_level,
         "score_breakdown": {
             "technical_raw": round(technical_raw, 3),
             "emotional_raw": round(emotional_raw, 3),
+            "skill_floor": skill_floor,
             "skill_ceiling": skill_ceiling,
             "duration_penalty": duration_penalty,
             "weights": {
