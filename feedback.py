@@ -304,19 +304,23 @@ NEVER split the difference — a G-shape on fret 6 is G or Concert C#, NEVER "G#
 - Spectral Rolloff: {tech_details.get('avg_spectral_rolloff', 'N/A')} Hz"""
 
     # Vocal-instrument coordination
-    # Trust user's instrument selection over unreliable audio detection
+    # ONLY trust user's instrument selection — Librosa often detects vocals
+    # in backing tracks, causing hallucinated vocal feedback
     instrument = artist_context.get("instrument", "")
     user_says_vocals = "vocal" in instrument.lower()
-    has_vocals = user_says_vocals or analysis.get("has_vocals", False)
     
-    if has_vocals:
+    if user_says_vocals:
         coord = analysis.get("coordination_score")
         coord_str = f" Coordination score: {coord}" if coord is not None else ""
         prompt += f"""
 - Vocals Present: Yes — the performer is singing while playing.{coord_str}
 - IMPORTANT: Provide feedback on BOTH the vocal performance AND the instrumental performance. Comment on vocal pitch, phrasing, breath control, and how well the singing coordinates with the playing."""
     else:
-        prompt += "\n- Vocals Present: No (instrumental only)"
+        prompt += """
+- Vocals Present: No (instrumental only). The performer did NOT select vocals.
+- Do NOT comment on singing, vocal pitch, vocal tone, breath control, or any vocal performance.
+- If you hear vocals in the audio, they are from a backing track, NOT the performer.
+- ONLY evaluate the selected instrument(s): """ + instrument
 
     # Notable pitch moments — spread across early, middle, and late sections
     pitches = analysis.get("pitches_per_second", [])
