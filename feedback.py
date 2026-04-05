@@ -174,6 +174,7 @@ CRITICAL RULES:
 6. The detected playing technique from audio analysis is: provided in the metrics. However, use your knowledge of the song to validate this. If the song is known to be played with fingerpicking (e.g. "Hey There Delilah", "Dust in the Wind", "Blackbird"), use "fingerpicking" regardless of what the audio detection says. If the song is known to be strummed, use "strumming." Your knowledge of the song overrides the audio detection for technique.
 7. If vocals are present, you MUST give EQUAL attention to vocal performance and instrumental performance. At least 2 of your "what_worked" items and 2 of your "needs_improvement" items should focus primarily on vocals (pitch, phrasing, breath control, tone, emotion, delivery). Do not let guitar feedback dominate — balance them evenly.
 8. ALWAYS specify which instrument: "your guitar tone" not "tone", "your vocal pitch" not "pitch".
+9. Do NOT quote or reference specific lyrics. You cannot hear exact words from the audio. Only describe vocal qualities (pitch, tone, phrasing, breath, emotion, delivery) and instrumental qualities. Never write lyrics in quotation marks or reference specific lyric lines. If you know the song's lyrics from your training data, do NOT insert them into feedback — you have no way to verify the performer actually sang those words.
 
 LANGUAGE RULES — THIS IS NON-NEGOTIABLE:
 - ZERO raw numbers, Hz values, percentages, or engineering jargon in feedback.
