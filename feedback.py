@@ -330,7 +330,7 @@ NEVER split the difference — a G-shape on fret 6 is G or Concert C#, NEVER "G#
 - If you hear vocals in the audio, they are from a backing track, NOT the performer.
 - ONLY evaluate the selected instrument(s): """ + instrument
 
-    # Lyrics transcription (from Whisper)
+# Lyrics transcription (from Whisper)
     if lyrics_transcript:
         prompt += f"""
 
@@ -344,6 +344,28 @@ IMPORTANT: You may reference these specific lyrics in your feedback to comment o
 - Phrasing choices (where the performer breathes, pauses, emphasizes)
 - How well the lyrics connect with the instrumental performance
 Only reference lyrics that appear in this transcription. Do not add lyrics from your training data."""
+
+    # Original song evaluation mode
+    style = artist_context.get("style", "")
+    if style == "Original Song" and lyrics_transcript:
+        prompt += """
+
+## ORIGINAL SONG EVALUATION
+This is the performer's ORIGINAL composition. Evaluate the SONGWRITING in addition to the performance:
+- LYRIC QUALITY: Are the lyrics compelling, authentic, and well-crafted? Do they convey a clear emotion or story?
+- MELODY: Is the melody memorable and interesting? Does it serve the lyrics well?
+- SONG STRUCTURE: Does the song have a clear arc (verse, chorus, bridge)? Does it build effectively?
+- ORIGINALITY: Does the song feel fresh and personal, or generic?
+Include at least 2 feedback items specifically about the songwriting (lyrics, melody, structure) in addition to the performance feedback."""
+    elif style == "Original Song" and not lyrics_transcript:
+        prompt += """
+
+## ORIGINAL SONG EVALUATION
+This is the performer's ORIGINAL composition. Since no vocal transcription is available, focus on:
+- MELODY: Is the melodic content interesting, memorable, and well-structured?
+- SONG STRUCTURE: Does the piece have a clear arc? Does it build effectively?
+- ORIGINALITY: Does the composition feel fresh and personal?
+Include at least 1-2 feedback items about the composition itself."""
 
     # Notable pitch moments
     pitches = analysis.get("pitches_per_second", [])
