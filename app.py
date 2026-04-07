@@ -444,6 +444,12 @@ def analyze_stem(wav_path):
     avg_rms = round(float(np.mean(rms)), 4)
     dynamic_range = round(float(np.max(rms) - np.min(rms)), 4)
     
+    # Perceptual tempo correction: fingerpicked ballads often register at
+    # double BPM because Librosa counts every pluck as a beat.
+    # If BPM > 150 and the track is low-energy, halve it.
+    if avg_bpm > 150 and avg_rms < 0.02:
+        avg_bpm = round(avg_bpm / 2, 1)
+    
     # --- Spectral features (tone quality) ---
     spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=512)[0]
     avg_brightness = round(float(np.mean(spectral_centroid)), 1)
