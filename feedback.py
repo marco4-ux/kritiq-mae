@@ -90,6 +90,7 @@ def generate_feedback(
     artist_context: dict,
     progress_context: dict = None,
     visual_analysis: dict = None,
+    lyrics_transcript: str = None,
 ) -> dict:
     """
     Generate feedback cards from pre-calculated scores via Claude API.
@@ -102,6 +103,7 @@ def generate_feedback(
                         "intentional_choices", "influence"}
         progress_context: {"previous_submissions": int, "previous_feedback": {...}} or None
         visual_analysis: from Claude Vision or None
+        lyrics_transcript: Whisper transcription of vocals or None
     
     Returns:
         {
@@ -117,8 +119,8 @@ def generate_feedback(
     harshness = artist_context.get("harshness", "Supportive Producer")
     intensity = INTENSITY_PRESETS.get(harshness, INTENSITY_PRESETS["Supportive Producer"])
     
-    system_prompt = _build_system_prompt(intensity, artist_context)
-    user_prompt = _build_user_prompt(scores, analysis, song_context, artist_context, progress_context, visual_analysis)
+    system_prompt = _build_system_prompt(intensity, artist_context, lyrics_transcript=lyrics_transcript)
+    user_prompt = _build_user_prompt(scores, analysis, song_context, artist_context, progress_context, visual_analysis, lyrics_transcript=lyrics_transcript)
     
     try:
         resp = http_requests.post(
@@ -156,9 +158,15 @@ def generate_feedback(
 
 # ─── Prompt builders ─────────────────────────────────────────────────
 
-def _build_system_prompt(intensity: dict, artist_context: dict) -> str:
+def _build_system_prompt(intensity: dict, artist_context: dict, lyrics_transcript: str = None) -> str:
     instrument = artist_context.get("instrument", "their instrument")
     
+    # Rule 9: conditional based on whether we have a real transcription
+    if lyrics_transcript:
+        lyrics_rule = """9. LYRICS FEEDBACK (transcription available): A Whisper transcription of the vocals has been provided. You MAY reference specific lyrics from the transcription to comment on delivery, phrasing, word clarity, and emotional interpretation. Only reference lyrics that appear in the provided transcription — do not invent or guess lyrics from your training data."""
+    else:
+        lyrics_rule = """9. Do NOT quote or reference specific lyrics. You cannot hear exact words from the audio. Only describe vocal qualities (pitch, tone, phrasing, breath, emotion, delivery) and instrumental qualities. Never write lyrics in quotation marks or reference specific lyric lines. If you know the song's lyrics from your training data, do NOT insert them into feedback — you have no way to verify the performer actually sang those words."""
+
     return f"""{intensity["persona"]}
 
 You are "Kritiq" — an elite music coach. Your philosophy is the 'Dylan Distinction': 
@@ -170,11 +178,11 @@ CRITICAL RULES:
 2. Your feedback must be CONSISTENT with the scores. A 4.0 = real problems. A 9.0 = exceptional.
 3. Include specific timestamps spread across the ENTIRE performance (beginning, middle, end).
 4. Your tone is: {intensity["tone"]}
-5. The performer is playing: {instrument}. ONLY reference these instrument(s). Do NOT assume they play other instruments visible in the video.
+5. The performer is playing: {instrument}. ONLY reference these instrument(s). Do NOT assume they play other instruments that may be visible in the video.
 6. The detected playing technique from audio analysis is: provided in the metrics. However, use your knowledge of the song to validate this. If the song is known to be played with fingerpicking (e.g. "Hey There Delilah", "Dust in the Wind", "Blackbird"), use "fingerpicking" regardless of what the audio detection says. If the song is known to be strummed, use "strumming." Your knowledge of the song overrides the audio detection for technique.
 7. If vocals are present, you MUST give EQUAL attention to vocal performance and instrumental performance. At least 2 of your "what_worked" items and 2 of your "needs_improvement" items should focus primarily on vocals (pitch, phrasing, breath control, tone, emotion, delivery). Do not let guitar feedback dominate — balance them evenly.
 8. ALWAYS specify which instrument: "your guitar tone" not "tone", "your vocal pitch" not "pitch".
-9. Do NOT quote or reference specific lyrics. You cannot hear exact words from the audio. Only describe vocal qualities (pitch, tone, phrasing, breath, emotion, delivery) and instrumental qualities. Never write lyrics in quotation marks or reference specific lyric lines. If you know the song's lyrics from your training data, do NOT insert them into feedback — you have no way to verify the performer actually sang those words.
+{lyrics_rule}
 
 LANGUAGE RULES — THIS IS NON-NEGOTIABLE:
 - ZERO raw numbers, Hz values, percentages, or engineering jargon in feedback.
@@ -242,6 +250,7 @@ def _build_user_prompt(
     artist_context: dict,
     progress_context: dict = None,
     visual_analysis: dict = None,
+    lyrics_transcript: str = None,
 ) -> str:
     
     overall = scores.get("overall", 0)
@@ -305,8 +314,6 @@ NEVER split the difference — a G-shape on fret 6 is G or Concert C#, NEVER "G#
 - Spectral Rolloff: {tech_details.get('avg_spectral_rolloff', 'N/A')} Hz"""
 
     # Vocal-instrument coordination
-    # ONLY trust user's instrument selection — Librosa often detects vocals
-    # in backing tracks, causing hallucinated vocal feedback
     instrument = artist_context.get("instrument", "")
     user_says_vocals = "vocal" in instrument.lower()
     
@@ -323,17 +330,30 @@ NEVER split the difference — a G-shape on fret 6 is G or Concert C#, NEVER "G#
 - If you hear vocals in the audio, they are from a backing track, NOT the performer.
 - ONLY evaluate the selected instrument(s): """ + instrument
 
-    # Notable pitch moments — spread across early, middle, and late sections
+    # Lyrics transcription (from Whisper)
+    if lyrics_transcript:
+        prompt += f"""
+
+## LYRICS TRANSCRIPTION (from Whisper — verified audio)
+The following lyrics were transcribed from the actual audio recording using speech-to-text:
+\"\"\"{lyrics_transcript}\"\"\"
+
+IMPORTANT: You may reference these specific lyrics in your feedback to comment on:
+- Word clarity and enunciation
+- Emotional delivery of specific lines
+- Phrasing choices (where the performer breathes, pauses, emphasizes)
+- How well the lyrics connect with the instrumental performance
+Only reference lyrics that appear in this transcription. Do not add lyrics from your training data."""
+
+    # Notable pitch moments
     pitches = analysis.get("pitches_per_second", [])
     if pitches:
         total = len(pitches)
-        # Sample from beginning, middle, and end
         early = pitches[:7]
         mid_start = max(0, total // 2 - 3)
         middle = pitches[mid_start:mid_start + 7]
         late = pitches[max(0, total - 7):]
         sampled = early + middle + late
-        # Deduplicate by time
         seen_times = set()
         unique = []
         for p in sampled:
@@ -344,7 +364,7 @@ NEVER split the difference — a G-shape on fret 6 is G or Concert C#, NEVER "G#
         pitch_str = ", ".join([f"{_seconds_to_mmss(p['time'])}:{p['note']}" for p in unique])
         prompt += f"\n- Pitch Timeline (sampled across performance): {pitch_str}"
     
-    # Notable onset timestamps — spread across full performance
+    # Notable onset timestamps
     onsets = analysis.get("onset_timestamps", [])
     if onsets:
         total = len(onsets)
@@ -356,7 +376,7 @@ NEVER split the difference — a G-shape on fret 6 is G or Concert C#, NEVER "G#
         onset_mmss = [_seconds_to_mmss(t) for t in sampled_onsets]
         prompt += f"\n- Onset Timestamps (sampled across performance): {onset_mmss}"
 
-    # Progress context (previous submission comparison)
+    # Progress context
     if progress_context and progress_context.get("previous_submissions", 0) > 0:
         prev = progress_context.get("previous_feedback", {})
         prompt += f"""
@@ -392,7 +412,6 @@ def _parse_feedback(raw_text: str) -> dict:
     # Remove markdown code fences if present
     if text.startswith("```"):
         lines = text.split("\n")
-        # Remove first and last lines if they're fences
         if lines[0].startswith("```"):
             lines = lines[1:]
         if lines and lines[-1].strip() == "```":
@@ -408,7 +427,6 @@ def _parse_feedback(raw_text: str) -> dict:
         }
     except json.JSONDecodeError as e:
         logger.warning(f"Failed to parse Claude JSON: {e}")
-        # Return the raw text as fallback
         return {
             "what_worked": [],
             "needs_improvement": [],
@@ -420,7 +438,6 @@ def _parse_feedback(raw_text: str) -> dict:
 # ─── Test ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Print what the prompt would look like (no API call)
     test_scores = {
         "overall": 6.5, "technical": 7.2, "emotional": 5.7,
         "pitch_accuracy": 0.849, "timing_consistency": 0.373,
