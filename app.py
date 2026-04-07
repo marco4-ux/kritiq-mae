@@ -920,23 +920,39 @@ def analyze():
         reference_analysis = None
         reference_track = None
         if ref_mode == "strict" and song_title:
-            # Step 6a: Check Supabase cache first
-            cached = get_cached_reference(song_title, song_artist)
-            if cached:
-                reference_analysis = cached
-                reference_track = {"title": song_title, "artist": song_artist, "source": "cache"}
+            # Step 6a: Check for user-uploaded reference track
+            if "reference_file" in request.files:
+                logger.info("Using user-uploaded reference track...")
+                ref_file = request.files["reference_file"]
+                ref_path = tempfile.mktemp(suffix=".upload_ref")
+                ref_file.save(ref_path)
+                temp_files.append(ref_path)
+                
+                ref_wav = ref_path + ".wav"
+                temp_files.append(ref_wav)
+                subprocess.run(
+                    ["ffmpeg", "-i", ref_path, "-ar", "22050", "-ac", "1", "-y", ref_wav],
+                    capture_output=True, text=True, timeout=30,
+                )
+                reference_analysis = analyze_stem(ref_wav)
+                reference_track = {"title": song_title, "artist": song_artist, "source": "user_upload"}
             else:
-                # Step 6b: Cache miss — fetch from Deezer, analyze, cache
-                logger.info("Fetching Deezer reference for strict mode scoring...")
-                deezer_ref = fetch_deezer_reference(song_title, song_artist)
-                if deezer_ref:
-                    reference_analysis = deezer_ref["analysis"]
-                    reference_track = deezer_ref["track"]
-                    # Cache for next time
-                    cache_song_reference(reference_track, reference_analysis)
+                # Step 6b: Check Supabase cache
+                cached = get_cached_reference(song_title, song_artist)
+                if cached:
+                    reference_analysis = cached
+                    reference_track = {"title": song_title, "artist": song_artist, "source": "cache"}
                 else:
-                    logger.info("No Deezer reference found, falling back to creative mode")
-                    ref_mode = "creative"
+                    # Step 6c: Cache miss — fetch from Deezer, analyze, cache
+                    logger.info("Fetching Deezer reference for strict mode scoring...")
+                    deezer_ref = fetch_deezer_reference(song_title, song_artist)
+                    if deezer_ref:
+                        reference_analysis = deezer_ref["analysis"]
+                        reference_track = deezer_ref["track"]
+                        cache_song_reference(reference_track, reference_analysis)
+                    else:
+                        logger.info("No Deezer reference found, falling back to creative mode")
+                        ref_mode = "creative"
         
         skill_level = request.form.get("skill_level", "Intermediate")
         scores = calculate_scores(metrics, reference_analysis=reference_analysis, mode=ref_mode, skill_level=skill_level)
