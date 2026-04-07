@@ -131,7 +131,7 @@ def upload_for_replicate(file_path):
     file_size = os.path.getsize(file_path)
     
     # For files under 10MB, use data URI (Replicate accepts these)
-    if file_size < 10 * 1024 * 1024:
+    if file_size < 20 * 1024 * 1024:
         with open(file_path, "rb") as f:
             data = base64.b64encode(f.read()).decode("utf-8")
         return f"data:audio/wav;base64,{data}"
