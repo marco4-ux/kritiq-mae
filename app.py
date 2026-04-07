@@ -814,7 +814,45 @@ def test_deezer():
         if wav_path and os.path.exists(wav_path):
             os.unlink(wav_path)
 
+# ─── Song Search (Deezer proxy for frontend autocomplete) ────────
 
+@app.route("/search-songs", methods=["GET", "OPTIONS"])
+def search_songs():
+    """Proxy Deezer search for frontend autocomplete (avoids CORS)."""
+    if request.method == "OPTIONS":
+        return '', 200
+    
+    query = request.args.get("q", "").strip()
+    if len(query) < 2:
+        return jsonify({"results": []})
+    
+    try:
+        resp = http_requests.get(
+            "https://api.deezer.com/search",
+            params={"q": query, "limit": 5},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        
+        results = []
+        seen = set()
+        for track in data.get("data", []):
+            title = track.get("title", "")
+            artist = track.get("artist", {}).get("name", "")
+            key = f"{title.lower()}|{artist.lower()}"
+            if key not in seen:
+                seen.add(key)
+                results.append({
+                    "title": title,
+                    "artist": artist,
+                    "id": track.get("id"),
+                })
+        
+        return jsonify({"results": results})
+    except Exception as e:
+        logger.warning(f"Song search failed: {e}")
+        return jsonify({"results": []})
 @app.route("/analyze", methods=["POST", "OPTIONS"])
 def analyze():
     """
