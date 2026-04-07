@@ -18,6 +18,7 @@ REPLICATE_VERSION = "25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa0383
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 @app.after_request
 def after_request(response):
@@ -1003,6 +1004,23 @@ def analyze():
         logger.info("Step 7: Running visual analysis on video frames...")
         visual_analysis = analyze_video(input_path, instrument=instrument)
         t_visual = time.time()
+
+        # Step 7b: Whisper transcription (if vocals selected and OpenAI key available)
+        lyrics_transcript = None
+        if OPENAI_API_KEY and "vocal" in instrument.lower():
+            try:
+                logger.info("Step 7b: Transcribing vocals with Whisper...")
+                import openai
+                client = openai.OpenAI(api_key=OPENAI_API_KEY)
+                with open(analysis_wav, "rb") as audio_file:
+                    transcript = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file,
+                    )
+                lyrics_transcript = transcript.text
+                logger.info(f"Whisper transcript: {lyrics_transcript[:100]}...")
+            except Exception as e:
+                logger.warning(f"Whisper transcription failed: {e}")
         
         # Step 8: Generate Claude feedback (optional — skip if no API key)
         feedback = None
@@ -1030,6 +1048,7 @@ def analyze():
                 song_context=song_context,
                 artist_context=artist_context,
                 visual_analysis=visual_analysis,
+                lyrics_transcript=lyrics_transcript,
             )
         t5 = time.time()
         
