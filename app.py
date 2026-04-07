@@ -1054,7 +1054,7 @@ def analyze():
             "reference": {
                 "track": reference_track,
                 "key": reference_analysis.get("detected_key") if reference_analysis else None,
-                "source": "deezer" if reference_track else None,
+                "source": reference_track.get("source", "deezer") if reference_track else None,
             } if reference_track else None,
             "visual_analysis": visual_analysis,
             "feedback": feedback,
