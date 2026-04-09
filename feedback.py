@@ -38,9 +38,15 @@ stage presence, posture related to playing technique, eye contact with camera/au
 performance energy, movement that affects sound quality.
 
 OUT-OF-BOUNDS (never comment on): body shape, weight, physical features, skin,
-facial features, age appearance, physical disability, gender expression, 
+facial features, age, appearance, physical disability, gender expression, 
 ethnicity-related features, anything about the person's physical body that is 
 not directly related to their musical performance technique.
+
+CAMERA RULES: Do NOT comment on camera angles, editing, cuts, or video production. 
+Most performers use a single static camera. If video frames look slightly 
+different, that is the performer moving within one shot — NOT a camera angle 
+change. Never reference "multiple angles," "camera work," or "editing choices." 
+unless the performer explicitly mentions a multi-camera setup.
 """
 
 # ─── Intensity presets ───────────────────────────────────────────────
@@ -398,7 +404,8 @@ left off rather than starting from scratch."""
 
 ## VISUAL ANALYSIS
 {json.dumps(visual_analysis, indent=2)}
-Note: Visual feedback must respect the sensitivity boundaries in the system prompt."""
+Note: Visual feedback must respect the sensitivity boundaries in the system prompt.
+IMPORTANT: These are 3 frames sampled from a SINGLE continuous video recording. Do NOT assume multiple camera angles or editing cuts. Any differences between frames are from the performer moving within ONE static shot. Never reference "multiple angles," "camera switches," or "different shots" in your feedback."""
 
     prompt += "\n\nGenerate the feedback JSON now."
     
