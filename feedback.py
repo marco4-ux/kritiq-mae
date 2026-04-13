@@ -34,19 +34,21 @@ GENRE_LIST = [
 SENSITIVITY_RULES = """
 VISUAL FEEDBACK BOUNDARIES (strictly enforced):
 IN-BOUNDS (you may comment on): grooming, attire, framing, lighting, gear care, 
-stage presence, posture related to playing technique, eye contact with camera/audience,
+stage presence, eye contact with camera/audience,
 performance energy, movement that affects sound quality.
+Do NOT comment on posture.
 
 OUT-OF-BOUNDS (never comment on): body shape, weight, physical features, skin,
 facial features, age, appearance, physical disability, gender expression, 
 ethnicity-related features, anything about the person's physical body that is 
 not directly related to their musical performance technique.
 
-CAMERA RULES: Do NOT comment on camera angles, editing, cuts, or video production. 
-Most performers use a single static camera. If video frames look slightly 
-different, that is the performer moving within one shot — NOT a camera angle 
-change. Never reference "multiple angles," "camera work," or "editing choices." 
-unless the performer explicitly mentions a multi-camera setup.
+CAMERA RULES: ASSUME EVERY VIDEO IS A SINGLE STATIC CAMERA. Do NOT comment on 
+camera angles, editing, cuts, or video production under any circumstances. All 
+videos are recorded on a single phone or camera with zero edits. Any variation 
+between frames is the performer moving — NOT a camera change. If you mention 
+"multiple angles," "camera work," "different shots," or "editing" your feedback is 
+wrong. This rule has no exceptions.
 """
 
 # ─── Intensity presets ───────────────────────────────────────────────
@@ -169,7 +171,7 @@ def _build_system_prompt(intensity: dict, artist_context: dict, lyrics_transcrip
     
     # Rule 9: conditional based on whether we have a real transcription
     if lyrics_transcript:
-        lyrics_rule = """9. LYRICS FEEDBACK (transcription available): A Whisper transcription of the vocals has been provided. You MAY reference specific lyrics from the transcription to comment on delivery, phrasing, word clarity, and emotional interpretation. Only reference lyrics that appear in the provided transcription — do not invent or guess lyrics from your training data."""
+        lyrics_rule = """9. LYRICS FEEDBACK (transcription available): A Whisper transcription of the vocals has been provided AND the song title/artist is known. Look up the OFFICIAL lyrics for this song from your training data and use those as the ground truth. The Whisper transcription may contain errors — if the official lyrics differ from the transcription, trust the official lyrics. Comment on delivery, phrasing, word clarity, and emotional interpretation based on the official lyrics. If you do not know the official lyrics for this song, fall back to the Whisper transcription only."""
     else:
         lyrics_rule = """9. Do NOT quote or reference specific lyrics. You cannot hear exact words from the audio. Only describe vocal qualities (pitch, tone, phrasing, breath, emotion, delivery) and instrumental qualities. Never write lyrics in quotation marks or reference specific lyric lines. If you know the song's lyrics from your training data, do NOT insert them into feedback — you have no way to verify the performer actually sang those words."""
 
@@ -184,7 +186,7 @@ CRITICAL RULES:
 2. Your feedback must be CONSISTENT with the scores. A 4.0 = real problems. A 9.0 = exceptional.
 3. Include specific timestamps spread across the ENTIRE performance (beginning, middle, end).
 4. Your tone is: {intensity["tone"]}
-5. The performer is playing: {instrument}. ONLY reference these instrument(s). Do NOT assume they play other instruments that may be visible in the video.
+5. The performer is playing: {instrument}. If multiple performers are visible in the video, identify and comment on each one separately — "the vocalist," "the guitarist," "the drummer." Do NOT default to "you" for everyone. Only the submitting user is "you" — other visible performers should be referenced by their instrument or role.
 6. The detected playing technique from audio analysis is: provided in the metrics. However, use your knowledge of the song to validate this. If the song is known to be played with fingerpicking (e.g. "Hey There Delilah", "Dust in the Wind", "Blackbird"), use "fingerpicking" regardless of what the audio detection says. If the song is known to be strummed, use "strumming." Your knowledge of the song overrides the audio detection for technique.
 7. If vocals are present, you MUST give EQUAL attention to vocal performance and instrumental performance. At least 2 of your "what_worked" items and 2 of your "needs_improvement" items should focus primarily on vocals (pitch, phrasing, breath control, tone, emotion, delivery). Do not let guitar feedback dominate — balance them evenly.
 8. ALWAYS specify which instrument: "your guitar tone" not "tone", "your vocal pitch" not "pitch".
@@ -215,6 +217,8 @@ TIMESTAMP RULES:
 - All timestamps must reference genuine musical moments — a chord change, a vocal phrase, a dynamic shift. Spread them across 0:05 to the end of the performance.
 
 {SENSITIVITY_RULES}
+
+ENVIRONMENT LABELS: When referencing the recording environment, use ONLY these terms: "bedroom," "venue show," or "studio ready." Do not invent other environment descriptions.
 
 Respond ONLY with valid JSON in this exact format:
 {{
@@ -405,7 +409,7 @@ left off rather than starting from scratch."""
 ## VISUAL ANALYSIS
 {json.dumps(visual_analysis, indent=2)}
 Note: Visual feedback must respect the sensitivity boundaries in the system prompt.
-IMPORTANT: These are 3 frames sampled from a SINGLE continuous video recording. Do NOT assume multiple camera angles or editing cuts. Any differences between frames are from the performer moving within ONE static shot. Never reference "multiple angles," "camera switches," or "different shots" in your feedback."""
+IMPORTANT: These are 3 frames sampled from a SINGLE continuous video recording at different timestamps. Do NOT assume multiple camera angles or editing cuts. Any differences between frames are from the performer moving within ONE static shot. Never reference "multiple angles," "camera switches," or "different shots" in your feedback. When referencing visual observations, use the TIMESTAMP (e.g. "at 0:23") not the frame number. Never say "Frame 1," "Frame 2," or "Frame 3" — convert to timestamps."""
 
     prompt += "\n\nGenerate the feedback JSON now."
     
