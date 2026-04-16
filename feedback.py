@@ -36,19 +36,19 @@ VISUAL FEEDBACK BOUNDARIES (strictly enforced):
 IN-BOUNDS (you may comment on): grooming, attire, framing, lighting, gear care, 
 stage presence, eye contact with camera/audience,
 performance energy, movement that affects sound quality.
-Do NOT comment on posture.
+Do NOT comment on posture. Do NOT comment on body positioning unless it directly affects instrument technique.
 
 OUT-OF-BOUNDS (never comment on): body shape, weight, physical features, skin,
 facial features, age, appearance, physical disability, gender expression, 
-ethnicity-related features, anything about the person's physical body that is 
+ethnicity-related features, posture, anything about the person's physical body that is 
 not directly related to their musical performance technique.
 
-CAMERA RULES: ASSUME EVERY VIDEO IS A SINGLE STATIC CAMERA. Do NOT comment on 
-camera angles, editing, cuts, or video production under any circumstances. All 
-videos are recorded on a single phone or camera with zero edits. Any variation 
-between frames is the performer moving — NOT a camera change. If you mention 
-"multiple angles," "camera work," "different shots," or "editing" your feedback is 
-wrong. This rule has no exceptions.
+CAMERA RULES — ABSOLUTE, NO EXCEPTIONS: 
+Every single video submitted to this platform is recorded on a single phone or camera with ZERO edits, ZERO cuts, and ZERO angle changes.
+Do NOT mention: camera angles, multiple angles, camera work, camera transitions, different shots, editing, cuts, video production, camera switching, angle changes, or multi-camera.
+Any visual variation between frames is the performer moving within a SINGLE static shot — it is NEVER a camera change.
+If your feedback contains ANY of the above forbidden camera terms, the entire feedback is invalid.
+This rule overrides all other observations about the video.
 """
 
 # ─── Intensity presets ───────────────────────────────────────────────
@@ -219,6 +219,11 @@ TIMESTAMP RULES:
 
 ENVIRONMENT LABELS: When referencing the recording environment, use ONLY these terms: "bedroom," "venue show," or "studio ready." Do not invent other environment descriptions.
 
+VISUAL FEEDBACK LENGTH RULES:
+- If only ONE person is visible in the video, keep visual feedback to 1-2 brief observations maximum. Do not write lengthy descriptions of a solo performer.
+- Visual feedback should only get detailed if there are MULTIPLE musicians to comment on, or if it is clearly a live concert/venue performance.
+- For a single person in a bedroom or simple setup, visual feedback should be minimal — focus your feedback on the audio performance instead."""
+
 Respond ONLY with valid JSON in this exact format:
 {{
     "what_worked": [
@@ -227,7 +232,7 @@ Respond ONLY with valid JSON in this exact format:
     "needs_improvement": [
         {{"point": "Brief headline", "timestamp": "1:12" or null, "detail": "Expanded explanation with specific actionable advice a musician can immediately apply"}},
     ],
-    "summary": "2-3 sentence overall assessment that balances technical evaluation with artistic intent"
+    "summary": "1-2 sentence overall assessment. Lead with what's working. Keep it encouraging and concise."
 }}
 
 Include 3-5 items in what_worked.
@@ -325,6 +330,15 @@ NEVER split the difference — a G-shape on fret 6 is G or Concert C#, NEVER "G#
     # Vocal-instrument coordination
     instrument = artist_context.get("instrument", "")
     user_says_vocals = "vocal" in instrument.lower()
+
+    # Instrument hallucination guard
+    if instrument and 'vocal' in instrument.lower() and not any(x in instrument.lower() for x in ['guitar', 'piano', 'bass', 'drum', 'ukulele', 'keyboard']):
+        prompt += """
+- INSTRUMENT HALLUCINATION GUARD: The performer selected VOCALS ONLY. There is NO instrument to evaluate.
+- Do NOT mention guitar, piano, bass, drums, chord progressions, strumming, fingerpicking, or any instrumental technique.
+- Do NOT reference chord names, transitions, or fretwork.
+- ALL feedback must be about vocal performance: pitch, tone, phrasing, breath control, emotion, delivery, timing.
+- If you hear instruments in the audio, they are from a backing track — do NOT evaluate them."""
     
     if user_says_vocals:
         coord = analysis.get("coordination_score")
