@@ -336,22 +336,39 @@ NEVER split the difference — a G-shape on fret 6 is G or Concert C#, NEVER "G#
         prompt += f"\n- Influence/Inspiration: {artist_context['influence']}"
 
     # Raw metrics for Claude to reference
+    # Detect vocals-only submission to strip misleading instrument metrics
+    instrument = artist_context.get("instrument", "")
+    is_vocals_only = (
+        instrument
+        and 'vocal' in instrument.lower()
+        and not any(x in instrument.lower() for x in ['guitar', 'piano', 'bass', 'drum', 'ukulele', 'keyboard', 'violin', 'banjo', 'mandolin', 'harmonica', 'saxophone', 'trumpet', 'brass', 'cello'])
+    )
+
     prompt += f"""
 
 ## RAW AUDIO METRICS
-- Detected Key: {analysis.get('detected_key', 'N/A')} (confidence: {analysis.get('key_confidence', 'N/A')})
-- BPM: {analysis.get('avg_bpm', 'N/A')}
 - Duration: {analysis.get('duration_seconds', 'N/A')}s
-- Onset Count: {analysis.get('onset_count', 'N/A')}
 - Average RMS: {analysis.get('avg_rms', 'N/A')}
 - Dynamic Range: {analysis.get('dynamic_range', 'N/A')}
-- Spectral Brightness: {analysis.get('avg_brightness', 'N/A')}
+- Spectral Brightness: {analysis.get('avg_brightness', 'N/A')}"""
+
+    # Only include chord/technique/BPM metrics for non-vocal-only submissions.
+    # On vocals-only audio, these fields are noise — chroma detects a "key" from
+    # vowel formants, beat tracker returns a "BPM" from syllable onsets, and
+    # technique classifier labels every vocal as "strumming" or "fingerpicking".
+    # Passing these to Claude causes it to hallucinate chord progressions and
+    # playing techniques that never existed.
+    if not is_vocals_only:
+        prompt += f"""
+- Detected Key: {analysis.get('detected_key', 'N/A')} (confidence: {analysis.get('key_confidence', 'N/A')})
+- BPM: {analysis.get('avg_bpm', 'N/A')}
+- Onset Count: {analysis.get('onset_count', 'N/A')}
 - Detected Technique: {analysis.get('technique', 'N/A')}"""
 
-    # Technique details
-    tech_details = analysis.get("technique_details")
-    if tech_details:
-        prompt += f"""
+        # Technique details
+        tech_details = analysis.get("technique_details")
+        if tech_details:
+            prompt += f"""
 - Spectral Bandwidth: {tech_details.get('avg_spectral_bandwidth', 'N/A')} Hz
 - Onset Strength: {tech_details.get('avg_onset_strength', 'N/A')}
 - Spectral Rolloff: {tech_details.get('avg_spectral_rolloff', 'N/A')} Hz"""
@@ -406,14 +423,15 @@ NEVER split the difference — a G-shape on fret 6 is G or Concert C#, NEVER "G#
     instrument = artist_context.get("instrument", "")
     user_says_vocals = "vocal" in instrument.lower()
 
-    # Instrument hallucination guard
-    if instrument and 'vocal' in instrument.lower() and not any(x in instrument.lower() for x in ['guitar', 'piano', 'bass', 'drum', 'ukulele', 'keyboard']):
+    # Instrument hallucination guard — now uses is_vocals_only computed earlier
+    if is_vocals_only:
         prompt += """
-- INSTRUMENT HALLUCINATION GUARD: The performer selected VOCALS ONLY. There is NO instrument to evaluate.
-- Do NOT mention guitar, piano, bass, drums, chord progressions, strumming, fingerpicking, or any instrumental technique.
-- Do NOT reference chord names, transitions, or fretwork.
-- ALL feedback must be about vocal performance: pitch, tone, phrasing, breath control, emotion, delivery, timing.
-- If you hear instruments in the audio, they are from a backing track — do NOT evaluate them."""
+- VOCALS-ONLY SUBMISSION: The performer selected VOCALS as their only instrument.
+- You will notice that BPM, detected key, technique classification, and chord-related metrics have been intentionally EXCLUDED from the metrics above.
+- This is because those metrics are misleading on a capella audio — chroma analysis detects a "key" from vowel formants, beat tracking returns a "BPM" from syllable onsets, and the technique classifier labels every vocal as "strumming" or "fingerpicking". These signals do NOT reflect a real instrument.
+- Do NOT invent chord names, BPMs, key signatures, strumming patterns, fingerpicking, or any other instrumental characteristic.
+- Do NOT mention guitar, piano, bass, drums, or any other instrument in your feedback.
+- ALL feedback must be about vocal performance only: pitch, tone, phrasing, breath control, emotion, delivery, lyrics, timing of vocal phrases."""
     
     if user_says_vocals:
         coord = analysis.get("coordination_score")
