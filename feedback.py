@@ -43,8 +43,10 @@ facial features, age, appearance, physical disability, gender expression,
 ethnicity-related features, posture, anything about the person's physical body that is 
 not directly related to their musical performance technique.
 
-CAMERA RULES — ABSOLUTE, NO EXCEPTIONS: 
-Every single video submitted to this platform is recorded on a single phone or camera with ZERO edits, ZERO cuts, and ZERO angle changes.
+CAMERA RULES: 
+DEFAULT ASSUMPTION: The video is recorded on a single phone or camera with no edits.
+Do NOT mention camera angles, cuts, or editing unless the video is CLEARLY a professional multi-camera production (e.g. concert venue with stage lighting, professional music video).
+For any bedroom, home, or simple setup recording — NEVER mention camera angles, editing, or video production. Any visual variation between frames is the performer moving, not a camera change.
 Do NOT mention: camera angles, multiple angles, camera work, camera transitions, different shots, editing, cuts, video production, camera switching, angle changes, or multi-camera.
 Any visual variation between frames is the performer moving within a SINGLE static shot — it is NEVER a camera change.
 If your feedback contains ANY of the above forbidden camera terms, the entire feedback is invalid.
