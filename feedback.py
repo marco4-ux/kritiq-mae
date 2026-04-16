@@ -193,6 +193,32 @@ CRITICAL RULES:
 7. If vocals are present, you MUST give EQUAL attention to vocal performance and instrumental performance. At least 2 of your "what_worked" items and 2 of your "needs_improvement" items should focus primarily on vocals (pitch, phrasing, breath control, tone, emotion, delivery). Do not let guitar feedback dominate - balance them evenly.
 8. ALWAYS specify which instrument: "your guitar tone" not "tone", "your vocal pitch" not "pitch".
 {lyrics_rule}
+10. PITCH ANALYSIS — HOW TO USE f0 DATA:
+The user prompt may include a "PITCH ANALYSIS" section with PYIN-derived metrics. These come from the actual fundamental frequency of the audio and are much more precise than chroma-based pitch detection.
+
+- `voiced_ratio` tells you how much of the audio had a clear single fundamental. 
+  * Above 0.70 = monophonic performance (solo vocals, fingerpicked single notes). Trust pitch metrics fully.
+  * 0.30 to 0.70 = mixed (vocals with guitar, some strummed sections). Comment on pitch where it's clear, avoid strong claims elsewhere.
+  * Below 0.30 = mostly polyphonic or strummed. DO NOT cite specific cents-off values or pitch drift. You can still comment on general pitch feel from the chroma data, but pitch-specific claims must be hedged or avoided.
+- `stability_score` (0-1) reflects how steady the pitch is within notes. High = clean sustained tone. Low = wobbly, drifting, or shaky.
+- `drift_cents` is the average deviation from nearest semitone. Positive = sharp, negative = flat. |drift| under 10 cents is imperceptible. 10-25 cents is slight. Over 25 cents is noticeable out-of-tune.
+- `off_pitch_segments` are specific moments where the performer held a note off-pitch for at least 200ms. Each has a timestamp, duration, and deviation in cents. USE THESE FOR TIMESTAMP-ANCHORED FEEDBACK when voiced_ratio is high enough to trust them.
+- `vibrato` tells you whether the performer uses vibrato and its character:
+  * rate_hz: 4-6 Hz is natural singer vibrato, 6-7 Hz is slightly fast/excited, above 7 Hz is a tremor or too fast, below 4 Hz is a wobble rather than vibrato
+  * extent_cents: 20-50 cents is musical and expressive, above 60 is operatic/wide, below 15 is barely-there
+  * segments lists specific sustained notes where vibrato was detected
+
+TRANSLATION RULES for pitch data:
+- NOT "you drifted 23 cents sharp" → YES "you're sitting slightly sharp — about a quarter step above where the note should be"
+- NOT "vibrato rate of 5.2 Hz, extent 32 cents" → YES "your vibrato has a natural, relaxed speed and a tasteful width — it sits right in the sweet spot"
+- NOT "voiced_ratio 0.18" → don't mention this at all. Just use it internally to decide how confidently to speak about pitch.
+- NOT "stability_score 0.42" → YES "your sustained notes have a slight wobble — try focusing on breath support to hold them steadier"
+
+When off_pitch_segments are present and voiced_ratio > 0.5, anchor at least ONE needs_improvement item to a specific pitch segment with its timestamp.
+
+When vibrato is detected, comment on it in what_worked (if it's in the musical sweet spot) or needs_improvement (if it's too fast, too narrow, too wide, or a wobble). Vibrato is a coaching opportunity — always comment on it one way or the other.
+
+When voiced_ratio < 0.30 and the instrument is polyphonic (strummed guitar, piano chords), DO NOT reference off_pitch_segments or drift_cents. State pitch feedback in general terms from chord/chroma data only.
 
 LANGUAGE RULES - THIS IS NON-NEGOTIABLE:
 - ZERO raw numbers, Hz values, percentages, or engineering jargon in feedback.
@@ -329,6 +355,52 @@ NEVER split the difference — a G-shape on fret 6 is G or Concert C#, NEVER "G#
 - Spectral Bandwidth: {tech_details.get('avg_spectral_bandwidth', 'N/A')} Hz
 - Onset Strength: {tech_details.get('avg_onset_strength', 'N/A')}
 - Spectral Rolloff: {tech_details.get('avg_spectral_rolloff', 'N/A')} Hz"""
+    
+    # PYIN pitch analysis — f0-level pitch metrics with confidence gating
+    pitch_analysis = analysis.get("pitch_analysis")
+    if pitch_analysis:
+        voiced_ratio = pitch_analysis.get("voiced_ratio", 0)
+        prompt += f"""
+
+## PITCH ANALYSIS (PYIN — actual fundamental frequency)
+- Voiced Ratio: {voiced_ratio} (fraction of audio with clear single fundamental)"""
+        
+        if voiced_ratio >= 0.30:
+            stability = pitch_analysis.get("stability_score")
+            drift = pitch_analysis.get("drift_cents")
+            
+            if stability is not None:
+                prompt += f"\n- Stability Score: {stability} (higher = steadier pitch within notes)"
+            if drift is not None:
+                drift_direction = "sharp" if drift > 0 else "flat" if drift < 0 else "in tune"
+                prompt += f"\n- Average Drift: {drift} cents ({drift_direction} of nearest semitone)"
+            
+            off_segs = pitch_analysis.get("off_pitch_segments", [])
+            if off_segs:
+                prompt += f"\n- Off-Pitch Segments ({len(off_segs)} detected, sustained >200ms with >25 cent deviation):"
+                for seg in off_segs[:8]:
+                    time_mmss = _seconds_to_mmss(seg["time"])
+                    direction = "sharp" if seg["deviation_cents"] > 0 else "flat"
+                    prompt += f"\n  • {time_mmss}: {abs(seg['deviation_cents'])} cents {direction} for {seg['duration']}s (conf {seg['confidence']})"
+            else:
+                prompt += "\n- Off-Pitch Segments: none detected — pitch held cleanly throughout"
+            
+            vibrato = pitch_analysis.get("vibrato", {})
+            if vibrato.get("detected"):
+                rate = vibrato.get("rate_hz")
+                extent = vibrato.get("extent_cents")
+                prompt += f"\n- Vibrato: detected — rate {rate} Hz, extent {extent} cents"
+                vib_segs = vibrato.get("segments", [])
+                if vib_segs:
+                    prompt += f"\n  Vibrato segments ({len(vib_segs)}):"
+                    for seg in vib_segs[:5]:
+                        time_mmss = _seconds_to_mmss(seg["time"])
+                        prompt += f"\n  • {time_mmss}: {seg['rate_hz']} Hz at {seg['extent_cents']} cents for {seg['duration']}s"
+            else:
+                prompt += "\n- Vibrato: not detected"
+        else:
+            prompt += f"""
+- NOTE: voiced_ratio is low ({voiced_ratio}) — this is polyphonic or strummed audio where PYIN cannot reliably track a single fundamental. DO NOT cite specific cents-off values, drift numbers, or off-pitch segments. Comment on pitch only at the chord/chroma level."""
 
     # Vocal-instrument coordination
     instrument = artist_context.get("instrument", "")
