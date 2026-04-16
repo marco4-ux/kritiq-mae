@@ -95,7 +95,7 @@ def warmup():
         
         return jsonify({
             "status": "ok",
-            "message": "Warmup request sent — GPU will be ready in ~30-60s",
+            "message": "Warmup request sent - GPU will be ready in ~30-60s",
             "prediction_id": prediction.get("id"),
             "prediction_status": prediction.get("status"),
         })
@@ -204,7 +204,7 @@ def fetch_deezer_reference(song_title: str, song_artist: str) -> dict:
         if os.path.exists(wav_path):
             os.unlink(wav_path)
         
-        logger.info(f"Deezer reference ready: {track_info['title']} by {track_info['artist']} — key: {ref_analysis.get('detected_key')}")
+        logger.info(f"Deezer reference ready: {track_info['title']} by {track_info['artist']} - key: {ref_analysis.get('detected_key')}")
         
         return {
             "track": track_info,
@@ -275,7 +275,7 @@ def cache_song_reference(track_info: dict, reference_analysis: dict) -> None:
             "reference_analyzed_at": datetime.now(timezone.utc).isoformat(),
         }
         
-        # Upsert — insert or update on conflict (title + artist unique constraint)
+        # Upsert - insert or update on conflict (title + artist unique constraint)
         resp = http_requests.post(
             f"{SUPABASE_URL}/rest/v1/songs",
             headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates,return=representation"},
@@ -321,7 +321,7 @@ def separate_stems_replicate(audio_url):
     headers = {
         "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
         "Content-Type": "application/json",
-        "Prefer": "wait",  # sync mode — wait up to 60s
+        "Prefer": "wait",  # sync mode - wait up to 60s
     }
     
     payload = {
@@ -385,6 +385,356 @@ def download_stem(url, output_path):
         for chunk in resp.iter_content(chunk_size=8192):
             f.write(chunk)
     return output_path
+
+# ─── Helper: PYIN pitch analysis ─────────────────────────────────────
+
+def _pyin_analysis(y, sr):
+    """
+    Run PYIN on the audio signal to extract f0 contour, pitch stability,
+    drift, off-pitch segments, vibrato, and voiced ratio.
+    
+    Returns a dict with these keys:
+        f0_contour: list of {time, hz, confidence, voiced} — downsampled to ~10Hz
+        voiced_ratio: 0..1 — fraction of audio with a clear single fundamental
+        stability_score: 0..1 — inverse of frame-to-frame f0 jitter (higher = more stable)
+        drift_cents: float — mean deviation from local tonic in cents (signed)
+        off_pitch_segments: list of {time, duration, deviation_cents, confidence}
+        vibrato: {
+            detected: bool,
+            rate_hz: float or null,
+            extent_cents: float or null,
+            segments: [{time, duration, rate_hz, extent_cents}]
+        }
+    
+    On strummed/polyphonic audio, voiced_ratio will be low (typically <0.3)
+    and consumers should downweight pitch-specific claims accordingly.
+    """
+    import librosa
+    import numpy as np
+    
+    # PYIN with librosa defaults (C2 65Hz to C7 2093Hz)
+    try:
+        f0, voiced_flag, voiced_prob = librosa.pyin(
+            y,
+            fmin=librosa.note_to_hz('C2'),
+            fmax=librosa.note_to_hz('C7'),
+            sr=sr,
+            frame_length=2048,
+            hop_length=512,
+        )
+    except Exception as e:
+        logger.warning(f"PYIN failed: {e}")
+        return _empty_pitch_analysis()
+    
+    hop_length = 512
+    frames_per_second = sr / hop_length
+    
+    # Confidence threshold for treating a frame as usable pitch data
+    CONF_THRESHOLD = 0.7
+    
+    # Voiced ratio: fraction of frames with confident fundamental
+    reliable_mask = np.array([
+        bool(vf) and vp >= CONF_THRESHOLD and f is not None and not np.isnan(f)
+        for vf, vp, f in zip(voiced_flag, voiced_prob, f0)
+    ])
+    voiced_ratio = float(np.mean(reliable_mask)) if len(reliable_mask) > 0 else 0.0
+    
+    # If essentially no reliable pitch data, return empty analysis early
+    if voiced_ratio < 0.05:
+        return _empty_pitch_analysis(voiced_ratio=voiced_ratio)
+    
+    # Downsample contour to ~10Hz for Claude's consumption (not every frame)
+    # Full resolution stays available via numpy calculations below
+    contour = []
+    step = max(1, int(frames_per_second / 10))
+    for i in range(0, len(f0), step):
+        hz = f0[i]
+        conf = float(voiced_prob[i])
+        voiced = bool(voiced_flag[i])
+        time_s = i / frames_per_second
+        if hz is not None and not np.isnan(hz) and voiced and conf >= CONF_THRESHOLD:
+            contour.append({
+                "time": round(float(time_s), 2),
+                "hz": round(float(hz), 1),
+                "confidence": round(conf, 3),
+                "voiced": True,
+            })
+    
+    # Only compute derived metrics on reliable frames
+    reliable_f0 = np.array([f for f, m in zip(f0, reliable_mask) if m])
+    reliable_times = np.array([
+        i / frames_per_second for i, m in enumerate(reliable_mask) if m
+    ])
+    
+    # Stability: inverse of normalized frame-to-frame jitter in cents
+    # Convert to cents first (log scale is how we hear pitch)
+    stability_score = 0.5
+    if len(reliable_f0) > 10:
+        cents = 1200 * np.log2(reliable_f0 / 440.0)
+        # Jitter = std of frame-to-frame differences
+        diffs = np.abs(np.diff(cents))
+        # Discard huge jumps (>200 cents) as note transitions, not instability
+        note_transitions = diffs > 200
+        jitter_diffs = diffs[~note_transitions]
+        if len(jitter_diffs) > 0:
+            mean_jitter = float(np.mean(jitter_diffs))
+            # 0 cents jitter = perfect (1.0), 50+ cents = unstable (0.0)
+            stability_score = max(0.0, min(1.0, 1.0 - mean_jitter / 50.0))
+    
+    # Drift: mean deviation from nearest semitone in cents (signed)
+    drift_cents = 0.0
+    if len(reliable_f0) > 0:
+        cents = 1200 * np.log2(reliable_f0 / 440.0)
+        nearest_semi = np.round(cents / 100.0) * 100.0
+        deviations = cents - nearest_semi
+        drift_cents = round(float(np.mean(deviations)), 1)
+    
+    # Off-pitch segments: sustained regions where deviation from nearest semitone
+    # exceeds 25 cents for at least 200ms
+    off_pitch_segments = _detect_off_pitch_segments(
+        f0, voiced_flag, voiced_prob,
+        frames_per_second=frames_per_second,
+        deviation_threshold_cents=25,
+        min_duration_s=0.2,
+        conf_threshold=CONF_THRESHOLD,
+    )
+    
+    # Vibrato: detect sustained notes and analyze f0 oscillation within
+    vibrato = _detect_vibrato(
+        f0, voiced_flag, voiced_prob,
+        frames_per_second=frames_per_second,
+        conf_threshold=CONF_THRESHOLD,
+    )
+    
+    return {
+        "f0_contour": contour,
+        "voiced_ratio": round(voiced_ratio, 3),
+        "stability_score": round(stability_score, 3),
+        "drift_cents": drift_cents,
+        "off_pitch_segments": off_pitch_segments,
+        "vibrato": vibrato,
+    }
+
+
+def _empty_pitch_analysis(voiced_ratio=0.0):
+    """Return an empty pitch_analysis dict when PYIN can't get a clean signal."""
+    return {
+        "f0_contour": [],
+        "voiced_ratio": round(float(voiced_ratio), 3),
+        "stability_score": None,
+        "drift_cents": None,
+        "off_pitch_segments": [],
+        "vibrato": {
+            "detected": False,
+            "rate_hz": None,
+            "extent_cents": None,
+            "segments": [],
+        },
+    }
+
+
+def _detect_off_pitch_segments(f0, voiced_flag, voiced_prob, frames_per_second,
+                                deviation_threshold_cents=25, min_duration_s=0.2,
+                                conf_threshold=0.7):
+    """
+    Find continuous segments where the performer sustained a note off-pitch.
+    Returns list of {time, duration, deviation_cents, confidence}.
+    """
+    import numpy as np
+    
+    min_frames = int(min_duration_s * frames_per_second)
+    segments = []
+    current_start = None
+    current_devs = []
+    current_confs = []
+    
+    for i, (hz, vf, vp) in enumerate(zip(f0, voiced_flag, voiced_prob)):
+        if hz is None or np.isnan(hz) or not vf or vp < conf_threshold:
+            # End of segment if we had one building
+            if current_start is not None and len(current_devs) >= min_frames:
+                _flush_segment(segments, current_start, current_devs, current_confs, frames_per_second)
+            current_start = None
+            current_devs = []
+            current_confs = []
+            continue
+        
+        cents = 1200 * np.log2(hz / 440.0)
+        nearest_semi = round(cents / 100.0) * 100.0
+        deviation = cents - nearest_semi
+        
+        if abs(deviation) >= deviation_threshold_cents:
+            if current_start is None:
+                current_start = i
+            current_devs.append(deviation)
+            current_confs.append(float(vp))
+        else:
+            if current_start is not None and len(current_devs) >= min_frames:
+                _flush_segment(segments, current_start, current_devs, current_confs, frames_per_second)
+            current_start = None
+            current_devs = []
+            current_confs = []
+    
+    # Flush any trailing segment
+    if current_start is not None and len(current_devs) >= min_frames:
+        _flush_segment(segments, current_start, current_devs, current_confs, frames_per_second)
+    
+    # Cap at 15 segments to keep prompt size reasonable
+    return segments[:15]
+
+
+def _flush_segment(segments, start_frame, devs, confs, frames_per_second):
+    """Append a segment entry from the accumulated deviation data."""
+    import numpy as np
+    start_time = start_frame / frames_per_second
+    duration = len(devs) / frames_per_second
+    mean_dev = float(np.mean(devs))
+    mean_conf = float(np.mean(confs))
+    segments.append({
+        "time": round(start_time, 2),
+        "duration": round(duration, 2),
+        "deviation_cents": round(mean_dev, 1),
+        "confidence": round(mean_conf, 3),
+    })
+
+
+def _detect_vibrato(f0, voiced_flag, voiced_prob, frames_per_second,
+                     conf_threshold=0.7, min_sustained_s=0.4):
+    """
+    Detect vibrato in sustained notes.
+    Returns {detected, rate_hz, extent_cents, segments}.
+    
+    Algorithm:
+    1. Find sustained voiced regions of at least min_sustained_s
+    2. For each region, check if f0 oscillates periodically around a mean
+    3. Measure rate (Hz) and extent (cents) via autocorrelation on the detrended signal
+    """
+    import numpy as np
+    
+    min_frames = int(min_sustained_s * frames_per_second)
+    sustained_regions = []
+    current_start = None
+    
+    for i, (hz, vf, vp) in enumerate(zip(f0, voiced_flag, voiced_prob)):
+        if hz is not None and not np.isnan(hz) and vf and vp >= conf_threshold:
+            if current_start is None:
+                current_start = i
+        else:
+            if current_start is not None and (i - current_start) >= min_frames:
+                sustained_regions.append((current_start, i))
+            current_start = None
+    
+    if current_start is not None and (len(f0) - current_start) >= min_frames:
+        sustained_regions.append((current_start, len(f0)))
+    
+    if not sustained_regions:
+        return {
+            "detected": False,
+            "rate_hz": None,
+            "extent_cents": None,
+            "segments": [],
+        }
+    
+    segments = []
+    rates = []
+    extents = []
+    
+    for start, end in sustained_regions:
+        region_f0 = np.array([f0[i] for i in range(start, end) if f0[i] is not None and not np.isnan(f0[i])])
+        if len(region_f0) < min_frames:
+            continue
+        
+        # Convert to cents relative to region mean
+        mean_hz = np.mean(region_f0)
+        if mean_hz <= 0:
+            continue
+        cents = 1200 * np.log2(region_f0 / mean_hz)
+        
+        # Detrend to isolate oscillation
+        cents_detrended = cents - np.mean(cents)
+        
+        # Extent: half the peak-to-peak range (amplitude of oscillation)
+        extent_cents = float((np.max(cents_detrended) - np.min(cents_detrended)) / 2.0)
+        
+        # Reject if barely any oscillation (<10 cents extent is not vibrato)
+        if extent_cents < 10:
+            continue
+        
+        # Rate: autocorrelation peak detection
+        rate_hz = _estimate_oscillation_rate(cents_detrended, frames_per_second)
+        
+        # Vibrato is typically 3-9 Hz. Outside that range it's not musical vibrato.
+        if rate_hz is None or rate_hz < 3.0 or rate_hz > 9.0:
+            continue
+        
+        segment_start_time = start / frames_per_second
+        segment_duration = (end - start) / frames_per_second
+        
+        segments.append({
+            "time": round(float(segment_start_time), 2),
+            "duration": round(float(segment_duration), 2),
+            "rate_hz": round(float(rate_hz), 2),
+            "extent_cents": round(extent_cents, 1),
+        })
+        rates.append(rate_hz)
+        extents.append(extent_cents)
+    
+    if not segments:
+        return {
+            "detected": False,
+            "rate_hz": None,
+            "extent_cents": None,
+            "segments": [],
+        }
+    
+    return {
+        "detected": True,
+        "rate_hz": round(float(np.mean(rates)), 2),
+        "extent_cents": round(float(np.mean(extents)), 1),
+        "segments": segments[:10],  # cap for prompt size
+    }
+
+
+def _estimate_oscillation_rate(signal, frames_per_second):
+    """
+    Estimate dominant oscillation rate via autocorrelation.
+    Returns rate in Hz or None if no clear peak in the 3-9 Hz band.
+    """
+    import numpy as np
+    
+    if len(signal) < 20:
+        return None
+    
+    # Autocorrelate
+    sig = signal - np.mean(signal)
+    if np.std(sig) == 0:
+        return None
+    
+    acf = np.correlate(sig, sig, mode='full')
+    acf = acf[len(acf) // 2:]
+    acf = acf / acf[0] if acf[0] != 0 else acf
+    
+    # Look for peaks in lag range corresponding to 3-9 Hz
+    min_lag = int(frames_per_second / 9.0)  # fastest: 9 Hz
+    max_lag = int(frames_per_second / 3.0)  # slowest: 3 Hz
+    
+    if max_lag >= len(acf):
+        max_lag = len(acf) - 1
+    if min_lag >= max_lag:
+        return None
+    
+    search_region = acf[min_lag:max_lag]
+    if len(search_region) == 0:
+        return None
+    
+    peak_lag = int(np.argmax(search_region)) + min_lag
+    peak_val = float(acf[peak_lag])
+    
+    # Require a reasonably strong periodic component
+    if peak_val < 0.3:
+        return None
+    
+    return frames_per_second / peak_lag
+
 
 # ─── Helper: Librosa analysis on a stem ──────────────────────────────
 
@@ -520,6 +870,11 @@ def analyze_stem(wav_path):
     else:
         coordination_score = None  # no vocals detected
     
+    # --- PYIN pitch analysis ---
+    # Runs on the full mix. voiced_ratio will naturally be low for strummed
+    # polyphonic audio, high for vocals and monophonic playing.
+    pitch_analysis = _pyin_analysis(y, sr)
+    
     return {
         "duration_seconds": round(duration, 2),
         "detected_key": detected_key,
@@ -540,6 +895,7 @@ def analyze_stem(wav_path):
         },
         "has_vocals": has_vocals,
         "coordination_score": coordination_score,
+        "pitch_analysis": pitch_analysis,
     }
 
 
@@ -854,6 +1210,7 @@ def search_songs():
     except Exception as e:
         logger.warning(f"Song search failed: {e}")
         return jsonify({"results": []})
+
 @app.route("/analyze", methods=["POST", "OPTIONS"])
 def analyze():
     """
@@ -878,7 +1235,7 @@ def analyze():
     try:
         t0 = time.time()
         
-        # Step 1: Extract audio (capped at 60s — enough for full scoring, keeps Demucs fast)
+        # Step 1: Extract audio (capped at 60s - enough for full scoring, keeps Demucs fast)
         logger.info("Step 1: Extracting audio with FFmpeg (max 60s)...")
         wav_path = extract_audio(input_path, sr=44100, mono=False, max_duration=60)
         temp_files.append(wav_path)
@@ -896,7 +1253,7 @@ def analyze():
         
         if solo_performance:
             # Solo performance: skip Demucs, analyze raw audio directly
-            logger.info("Step 2: Solo performance — skipping Demucs, analyzing raw audio...")
+            logger.info("Step 2: Solo performance - skipping Demucs, analyzing raw audio...")
             
             # Convert to mono 22050 for Librosa
             analysis_wav = wav_path + ".analysis.wav"
@@ -982,7 +1339,7 @@ def analyze():
                     reference_analysis = cached
                     reference_track = {"title": song_title, "artist": song_artist, "source": "cache"}
                 else:
-                    # Step 6c: Cache miss — fetch from Deezer, analyze, cache
+                    # Step 6c: Cache miss - fetch from Deezer, analyze, cache
                     logger.info("Fetching Deezer reference for strict mode scoring...")
                     deezer_ref = fetch_deezer_reference(song_title, song_artist)
                     if deezer_ref:
@@ -1022,7 +1379,7 @@ def analyze():
             except Exception as e:
                 logger.warning(f"Whisper transcription failed: {e}")
         
-        # Step 8: Generate Claude feedback (optional — skip if no API key)
+        # Step 8: Generate Claude feedback (optional - skip if no API key)
         feedback = None
         from feedback import generate_feedback, ANTHROPIC_API_KEY as _ak
         if _ak:
