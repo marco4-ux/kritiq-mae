@@ -18,7 +18,10 @@ REPLICATE_VERSION = "25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa0383
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+
+import jwt as pyjwt
 
 @app.after_request
 def after_request(response):
@@ -290,16 +293,44 @@ def cache_song_reference(track_info: dict, reference_analysis: dict) -> None:
     except Exception as e:
         logger.warning(f"Supabase cache save failed: {e}")
 
-def save_submission(data: dict) -> str:
-    """Save a submission record to Supabase. Returns submission ID or None."""
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+def upsert_song(song_title: str, song_artist: str) -> str:
+    """
+    Ensure a song exists in the `songs` table and return its UUID.
+    If the song already exists (by title + artist), returns its existing id.
+    If not, inserts a minimal row and returns the new id.
+    
+    Returns the song UUID as a string, or None on failure.
+    """
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not song_title:
         return None
     
     try:
-        resp = http_requests.post(
-            f"{SUPABASE_URL}/rest/v1/submissions",
+        # Check if song already exists
+        resp = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/songs",
             headers=_supabase_headers(),
-            json=data,
+            params={
+                "title": f"eq.{song_title}",
+                "artist": f"eq.{song_artist}",
+                "select": "id",
+                "limit": "1",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if rows:
+            return rows[0].get("id")
+        
+        # Insert minimal row
+        payload = {
+            "title": song_title,
+            "artist": song_artist,
+        }
+        resp = http_requests.post(
+            f"{SUPABASE_URL}/rest/v1/songs",
+            headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates,return=representation"},
+            json=payload,
             timeout=10,
         )
         resp.raise_for_status()
@@ -308,8 +339,132 @@ def save_submission(data: dict) -> str:
             return rows[0].get("id")
         return None
     except Exception as e:
-        logger.warning(f"Supabase submission save failed: {e}")
+        logger.warning(f"Supabase song upsert failed: {e}")
         return None
+
+
+def save_submission(data: dict) -> str:
+    """Save a submission record to Supabase. Returns an ID or None.
+    
+    Always writes to `performances` (public ledger).
+    If data contains a user_id, also writes to `submissions` (user's tracked library).
+    Returns the submissions.id when authenticated, else the performances.id.
+    """
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return None
+    
+    user_id = data.pop("user_id", None)
+    song_title = data.pop("song_title", "")
+    song_artist = data.pop("song_artist", "")
+    
+    # Write to performances (always, anonymous-compatible)
+    performance_id = None
+    try:
+        performance_payload = {
+            "song_title": song_title,
+            "artist_name": song_artist,
+            "feedback": data.get("feedback"),
+            "overall_score": data.get("scores", {}).get("overall") if data.get("scores") else None,
+            "processed": True,
+        }
+        resp = http_requests.post(
+            f"{SUPABASE_URL}/rest/v1/performances",
+            headers=_supabase_headers(),
+            json=performance_payload,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if rows:
+            performance_id = rows[0].get("id")
+    except Exception as e:
+        logger.warning(f"Supabase performances save failed: {e}")
+    
+    # Write to submissions only if authenticated
+    if user_id:
+        song_id = upsert_song(song_title, song_artist)
+        if not song_id:
+            logger.warning("Could not resolve song_id for authenticated submission, skipping submissions write")
+            return performance_id
+        
+        try:
+            submission_payload = {
+                "user_id": user_id,
+                "song_id": song_id,
+                "skill_level": data.get("skill_level"),
+                "harshness": data.get("harshness"),
+                "style": data.get("style"),
+                "genre": data.get("genre"),
+                "environment": data.get("environment"),
+                "intentional_choices": data.get("intentional_choices"),
+                "influence": data.get("influence"),
+                "reference_weighting": data.get("reference_weighting"),
+                "stems": data.get("stems"),
+                "performance_analysis": data.get("performance_analysis"),
+                "visual_analysis": data.get("visual_analysis"),
+                "scores": data.get("scores"),
+                "feedback": data.get("feedback"),
+                "pipeline_timing": data.get("pipeline_timing"),
+                "status": data.get("status", "completed"),
+                "completed_at": data.get("completed_at"),
+            }
+            resp = http_requests.post(
+                f"{SUPABASE_URL}/rest/v1/submissions",
+                headers=_supabase_headers(),
+                json=submission_payload,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            rows = resp.json()
+            if rows:
+                return rows[0].get("id")
+        except Exception as e:
+            logger.warning(f"Supabase submissions save failed: {e}")
+    
+    return performance_id
+
+def verify_supabase_jwt(auth_header: str) -> tuple:
+    """
+    Verify a Supabase JWT from an Authorization header.
+    
+    Args:
+        auth_header: Full header value, e.g. "Bearer eyJhbGc..."
+    
+    Returns:
+        (user_id, None) on success
+        (None, error_message) on failure
+        (None, None) if no header was provided (anonymous request)
+    """
+    if not auth_header:
+        return (None, None)  # Anonymous request — not an error
+    
+    if not SUPABASE_JWT_SECRET:
+        return (None, "SUPABASE_JWT_SECRET not configured on server")
+    
+    # Expect "Bearer <token>"
+    parts = auth_header.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return (None, "Invalid Authorization header format")
+    
+    token = parts[1]
+    
+    try:
+        payload = pyjwt.decode(
+            token,
+            SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            audience="authenticated",
+        )
+        user_id = payload.get("sub")
+        if not user_id:
+            return (None, "JWT missing sub claim")
+        return (user_id, None)
+    except pyjwt.ExpiredSignatureError:
+        return (None, "Token expired")
+    except pyjwt.InvalidAudienceError:
+        return (None, "Invalid token audience")
+    except pyjwt.InvalidTokenError as e:
+        return (None, f"Invalid token: {str(e)}")
 
 # ─── Helper: Call Replicate Demucs API ───────────────────────────────
 
@@ -1219,9 +1374,21 @@ def analyze():
     2. WAV → Replicate Demucs → separated stems (vocals, no_vocals/other)
     3. Instrument stem → Librosa analysis → structured metrics
     4. Return JSON with all metrics + stem URLs
+    
+    Auth behavior:
+    - No Authorization header: anonymous path, writes to `performances` only
+    - Valid JWT: authenticated path, writes to both `performances` and `submissions`
+    - Invalid JWT: 401 (no silent fallback to anonymous)
     """
     if request.method == "OPTIONS":
         return '', 200
+    
+    # Verify JWT if provided (optional auth)
+    auth_header = request.headers.get("Authorization", "")
+    user_id, auth_error = verify_supabase_jwt(auth_header)
+    if auth_header and auth_error:
+        return jsonify({"error": f"Authentication failed: {auth_error}"}), 401
+    
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     
@@ -1414,6 +1581,9 @@ def analyze():
         try:
             from datetime import datetime, timezone
             submission_data = {
+                "user_id": user_id,  # None for anonymous; populated for authenticated
+                "song_title": song_title,
+                "song_artist": song_artist,
                 "skill_level": request.form.get("skill_level", "Intermediate"),
                 "harshness": request.form.get("harshness", "Supportive Producer"),
                 "style": request.form.get("style", "Original Style"),
