@@ -146,7 +146,7 @@ def generate_feedback(
                 "system": system_prompt,
                 "messages": [{"role": "user", "content": user_prompt}],
             },
-            timeout=30,
+            timeout=90,
         )
         resp.raise_for_status()
         result = resp.json()
