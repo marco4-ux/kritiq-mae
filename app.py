@@ -1386,8 +1386,9 @@ def analyze():
     # Verify JWT if provided (optional auth)
     auth_header = request.headers.get("Authorization", "")
     user_id, auth_error = verify_supabase_jwt(auth_header)
-    if auth_header and auth_error:
-        return jsonify({"error": f"Authentication failed: {auth_error}"}), 401
+    if auth_error:
+    logger.warning(f"Auth verification failed (allowing anonymous): {auth_error}")
+    user_id = None
     
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
