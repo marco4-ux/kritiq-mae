@@ -423,46 +423,50 @@ def save_submission(data: dict) -> str:
     
     return performance_id
 
+from jwt import PyJWKClient
+
+_jwks_client = None
+
+def _get_jwks_client():
+    global _jwks_client
+    if _jwks_client is None and SUPABASE_URL:
+        _jwks_client = PyJWKClient(f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json", cache_keys=True)
+    return _jwks_client
+
+
 def verify_supabase_jwt(auth_header: str) -> tuple:
-    """
-    Verify a Supabase JWT from an Authorization header.
-    
-    Args:
-        auth_header: Full header value, e.g. "Bearer eyJhbGc..."
-    
-    Returns:
-        (user_id, None) on success
-        (None, error_message) on failure
-        (None, None) if no header was provided (anonymous request)
-    """
     if not auth_header:
-        return (None, None)  # Anonymous request — not an error
-    
-    if not SUPABASE_JWT_SECRET:
-        return (None, "SUPABASE_JWT_SECRET not configured on server")
-    
-    # Expect "Bearer <token>"
+        return (None, None)
+
     parts = auth_header.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
         return (None, "Invalid Authorization header format")
-    
+
     token = parts[1]
-    
+
     try:
-        payload = pyjwt.decode(
-            token,
-            SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
-            audience="authenticated",
-        )
+        alg = pyjwt.get_unverified_header(token).get("alg", "").upper()
+
+        if alg == "HS256":
+            if not SUPABASE_JWT_SECRET:
+                return (None, "SUPABASE_JWT_SECRET not configured")
+            payload = pyjwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"], options={"verify_aud": False})
+        elif alg in ("RS256", "ES256"):
+            jwks_client = _get_jwks_client()
+            if not jwks_client:
+                return (None, "JWKS client could not be initialized")
+            signing_key = jwks_client.get_signing_key_from_jwt(token).key
+            payload = pyjwt.decode(token, signing_key, algorithms=[alg], options={"verify_aud": False})
+        else:
+            return (None, f"Unsupported signing algorithm: {alg}")
+
         user_id = payload.get("sub")
         if not user_id:
             return (None, "JWT missing sub claim")
         return (user_id, None)
+
     except pyjwt.ExpiredSignatureError:
         return (None, "Token expired")
-    except pyjwt.InvalidAudienceError:
-        return (None, "Invalid token audience")
     except pyjwt.InvalidTokenError as e:
         return (None, f"Invalid token: {str(e)}")
 
@@ -1386,9 +1390,8 @@ def analyze():
     # Verify JWT if provided (optional auth)
     auth_header = request.headers.get("Authorization", "")
     user_id, auth_error = verify_supabase_jwt(auth_header)
-    if auth_error:
-        logger.warning(f"Auth verification failed (allowing anonymous): {auth_error}")
-        user_id = None
+    if auth_header and auth_error:
+        return jsonify({"error": f"Authentication failed: {auth_error}"}), 401
     
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
