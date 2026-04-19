@@ -6,6 +6,7 @@ import json
 import time
 import requests as http_requests
 import logging
+import gc
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -185,7 +186,7 @@ def fetch_deezer_reference(song_title: str, song_artist: str) -> dict:
             capture_output=True, text=True, timeout=30,
         )
         
-        ref_analysis = analyze_stem(wav_path)
+        ref_analysis = analyze_stem(wav_path, lightweight=True)
         
         if os.path.exists(preview_path):
             os.unlink(preview_path)
@@ -827,7 +828,7 @@ def _estimate_oscillation_rate(signal, frames_per_second):
 
 # ─── Helper: Librosa analysis on a stem ──────────────────────────────
 
-def analyze_stem(wav_path):
+def analyze_stem(wav_path, lightweight=False):
     """Run Librosa analysis on an audio file. Returns structured metrics."""
     import librosa
     import numpy as np
@@ -928,7 +929,11 @@ def analyze_stem(wav_path):
     else:
         coordination_score = None
     
-    pitch_analysis = _pyin_analysis(y, sr)
+    # --- PYIN pitch analysis ---
+    if lightweight:
+        pitch_analysis = _empty_pitch_analysis()
+    else:
+        pitch_analysis = _pyin_analysis(y, sr)
     
     return {
         "duration_seconds": round(duration, 2),
@@ -1348,6 +1353,7 @@ def analyze():
         
         logger.info("Step 5: Running Librosa analysis...")
         metrics = analyze_stem(analysis_wav)
+        gc.collect()
         t3 = time.time()
         
         logger.info("Step 6: Calculating scores...")
@@ -1373,7 +1379,8 @@ def analyze():
                     ["ffmpeg", "-i", ref_path, "-ar", "22050", "-ac", "1", "-y", ref_wav],
                     capture_output=True, text=True, timeout=30,
                 )
-                reference_analysis = analyze_stem(ref_wav)
+                reference_analysis = analyze_stem(ref_wav, lightweight=True)
+                gc.collect()
                 reference_track = {"title": song_title, "artist": song_artist, "source": "user_upload"}
             else:
                 cached = get_cached_reference(song_title, song_artist)
