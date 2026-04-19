@@ -337,10 +337,20 @@ def save_submission(data: dict) -> str:
     # Write to performances (always, anonymous-compatible)
     performance_id = None
     try:
+        # Bundle scores + visual_analysis into feedback for the public archive
+        # so the modal can render the full breakdown without a join.
+        bundled_feedback = dict(data.get("feedback") or {})
+        if data.get("scores"):
+            bundled_feedback["scores"] = data.get("scores")
+        if data.get("visual_analysis"):
+            bundled_feedback["visual_analysis"] = data.get("visual_analysis")
+        if data.get("performance_analysis"):
+            bundled_feedback["analysis"] = data.get("performance_analysis")
+
         performance_payload = {
             "song_title": song_title,
             "artist_name": song_artist,
-            "feedback": data.get("feedback"),
+            "feedback": bundled_feedback,
             "overall_score": data.get("scores", {}).get("overall") if data.get("scores") else None,
             "processed": True,
             "submitter_name": submitter_name,
