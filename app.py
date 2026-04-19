@@ -44,9 +44,6 @@ def health():
 def warmup():
     """
     Pre-warm the Replicate Demucs GPU.
-    Call this when the user opens the submission form — by the time they
-    fill in fields and hit submit, the GPU will be warm and ready.
-    Returns immediately after sending the request (doesn't wait for result).
     """
     if not REPLICATE_API_TOKEN:
         return jsonify({"status": "error", "message": "REPLICATE_API_TOKEN not set"}), 500
@@ -56,12 +53,10 @@ def warmup():
         import struct
         import io
         
-        # Generate a 1-second silent WAV in memory (smallest valid audio)
         sample_rate = 8000
-        num_samples = sample_rate  # 1 second
+        num_samples = sample_rate
         wav_buf = io.BytesIO()
-        # WAV header
-        data_size = num_samples * 2  # 16-bit mono
+        data_size = num_samples * 2
         wav_buf.write(b'RIFF')
         wav_buf.write(struct.pack('<I', 36 + data_size))
         wav_buf.write(b'WAVE')
@@ -69,12 +64,11 @@ def warmup():
         wav_buf.write(struct.pack('<IHHIIHH', 16, 1, 1, sample_rate, sample_rate * 2, 2, 16))
         wav_buf.write(b'data')
         wav_buf.write(struct.pack('<I', data_size))
-        wav_buf.write(b'\x00' * data_size)  # silence
+        wav_buf.write(b'\x00' * data_size)
         
         audio_data = base64.b64encode(wav_buf.getvalue()).decode("utf-8")
         audio_url = f"data:audio/wav;base64,{audio_data}"
         
-        # Send async prediction (don't wait for result — just wake up the GPU)
         headers = {
             "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
             "Content-Type": "application/json",
@@ -127,14 +121,11 @@ def extract_audio(input_path, sr=44100, mono=True, max_duration=None):
 # ─── Helper: Upload file to tmpfiles.org for Replicate input ────────
 
 def upload_for_replicate(file_path):
-    """Upload a file and return a public URL for Replicate to consume.
-    Uses a simple file hosting approach via data URI for small files,
-    or a temporary upload service."""
+    """Upload a file and return a public URL for Replicate to consume."""
     import base64
     
     file_size = os.path.getsize(file_path)
     
-    # For files under 10MB, use data URI (Replicate accepts these)
     if file_size < 20 * 1024 * 1024:
         with open(file_path, "rb") as f:
             data = base64.b64encode(f.read()).decode("utf-8")
@@ -147,15 +138,12 @@ def upload_for_replicate(file_path):
 def fetch_deezer_reference(song_title: str, song_artist: str) -> dict:
     """
     Search Deezer for a song, download the 30s preview, run Librosa on it.
-    Returns {"track": {...}, "analysis": {...}} or None if not found.
-    Results should be cached in Supabase (songs table) after first lookup.
     """
     query = f"{song_title} {song_artist}".strip()
     if not query:
         return None
     
     try:
-        # Step 1: Search Deezer
         logger.info(f"Deezer reference lookup: {query}")
         search_resp = http_requests.get(
             "https://api.deezer.com/search",
@@ -184,7 +172,6 @@ def fetch_deezer_reference(song_title: str, song_artist: str) -> dict:
             "preview_url": preview_url,
         }
         
-        # Step 2: Download 30s preview
         dl_resp = http_requests.get(preview_url, timeout=30)
         dl_resp.raise_for_status()
         
@@ -192,7 +179,6 @@ def fetch_deezer_reference(song_title: str, song_artist: str) -> dict:
         with open(preview_path, "wb") as f:
             f.write(dl_resp.content)
         
-        # Step 3: Convert to WAV and analyze
         wav_path = preview_path + ".wav"
         subprocess.run(
             ["ffmpeg", "-i", preview_path, "-ar", "22050", "-ac", "1", "-y", wav_path],
@@ -201,7 +187,6 @@ def fetch_deezer_reference(song_title: str, song_artist: str) -> dict:
         
         ref_analysis = analyze_stem(wav_path)
         
-        # Cleanup
         if os.path.exists(preview_path):
             os.unlink(preview_path)
         if os.path.exists(wav_path):
@@ -229,7 +214,7 @@ def _supabase_headers():
     }
 
 def get_cached_reference(song_title: str, song_artist: str) -> dict:
-    """Look up cached song reference from Supabase. Returns analysis dict or None."""
+    """Look up cached song reference from Supabase."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return None
     
@@ -273,12 +258,11 @@ def cache_song_reference(track_info: dict, reference_analysis: dict) -> None:
             "deezer_preview_url": track_info.get("preview_url"),
             "album": track_info.get("album"),
             "duration_seconds": track_info.get("duration"),
-            "reference_analysis": reference_analysis,  # PostgREST accepts dicts for JSONB
+            "reference_analysis": reference_analysis,
             "reference_source": "deezer",
             "reference_analyzed_at": datetime.now(timezone.utc).isoformat(),
         }
         
-        # Upsert - insert or update on conflict (title + artist unique constraint)
         resp = http_requests.post(
             f"{SUPABASE_URL}/rest/v1/songs",
             headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates,return=representation"},
@@ -294,18 +278,11 @@ def cache_song_reference(track_info: dict, reference_analysis: dict) -> None:
         logger.warning(f"Supabase cache save failed: {e}")
 
 def upsert_song(song_title: str, song_artist: str) -> str:
-    """
-    Ensure a song exists in the `songs` table and return its UUID.
-    If the song already exists (by title + artist), returns its existing id.
-    If not, inserts a minimal row and returns the new id.
-    
-    Returns the song UUID as a string, or None on failure.
-    """
+    """Ensure a song exists in the `songs` table and return its UUID."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not song_title:
         return None
     
     try:
-        # Check if song already exists
         resp = http_requests.get(
             f"{SUPABASE_URL}/rest/v1/songs",
             headers=_supabase_headers(),
@@ -322,7 +299,6 @@ def upsert_song(song_title: str, song_artist: str) -> str:
         if rows:
             return rows[0].get("id")
         
-        # Insert minimal row
         payload = {
             "title": song_title,
             "artist": song_artist,
@@ -354,6 +330,7 @@ def save_submission(data: dict) -> str:
         return None
     
     user_id = data.pop("user_id", None)
+    submitter_name = data.pop("submitter_name", "Anonymous")
     song_title = data.pop("song_title", "")
     song_artist = data.pop("song_artist", "")
     
@@ -366,6 +343,7 @@ def save_submission(data: dict) -> str:
             "feedback": data.get("feedback"),
             "overall_score": data.get("scores", {}).get("overall") if data.get("scores") else None,
             "processed": True,
+            "submitter_name": submitter_name,
         }
         resp = http_requests.post(
             f"{SUPABASE_URL}/rest/v1/performances",
@@ -435,12 +413,13 @@ def _get_jwks_client():
 
 
 def verify_supabase_jwt(auth_header: str) -> tuple:
+    """Returns (user_id, email, error). email may be None if not in token."""
     if not auth_header:
-        return (None, None)
+        return (None, None, None)
 
     parts = auth_header.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
-        return (None, "Invalid Authorization header format")
+        return (None, None, "Invalid Authorization header format")
 
     token = parts[1]
 
@@ -449,26 +428,27 @@ def verify_supabase_jwt(auth_header: str) -> tuple:
 
         if alg == "HS256":
             if not SUPABASE_JWT_SECRET:
-                return (None, "SUPABASE_JWT_SECRET not configured")
+                return (None, None, "SUPABASE_JWT_SECRET not configured")
             payload = pyjwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"], options={"verify_aud": False})
         elif alg in ("RS256", "ES256"):
             jwks_client = _get_jwks_client()
             if not jwks_client:
-                return (None, "JWKS client could not be initialized")
+                return (None, None, "JWKS client could not be initialized")
             signing_key = jwks_client.get_signing_key_from_jwt(token).key
             payload = pyjwt.decode(token, signing_key, algorithms=[alg], options={"verify_aud": False})
         else:
-            return (None, f"Unsupported signing algorithm: {alg}")
+            return (None, None, f"Unsupported signing algorithm: {alg}")
 
         user_id = payload.get("sub")
         if not user_id:
-            return (None, "JWT missing sub claim")
-        return (user_id, None)
+            return (None, None, "JWT missing sub claim")
+        email = payload.get("email")
+        return (user_id, email, None)
 
     except pyjwt.ExpiredSignatureError:
-        return (None, "Token expired")
+        return (None, None, "Token expired")
     except pyjwt.InvalidTokenError as e:
-        return (None, f"Invalid token: {str(e)}")
+        return (None, None, f"Invalid token: {str(e)}")
 
 # ─── Helper: Call Replicate Demucs API ───────────────────────────────
 
@@ -480,7 +460,7 @@ def separate_stems_replicate(audio_url):
     headers = {
         "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
         "Content-Type": "application/json",
-        "Prefer": "wait",  # sync mode - wait up to 60s
+        "Prefer": "wait",
     }
     
     payload = {
@@ -501,8 +481,6 @@ def separate_stems_replicate(audio_url):
     resp.raise_for_status()
     result = resp.json()
     
-    # If sync completed, status will be "succeeded"
-    # If it took >60s, we need to poll
     if result.get("status") not in ("succeeded", "failed", "canceled"):
         result = _poll_prediction(result["id"])
     
@@ -551,27 +529,10 @@ def _pyin_analysis(y, sr):
     """
     Run PYIN on the audio signal to extract f0 contour, pitch stability,
     drift, off-pitch segments, vibrato, and voiced ratio.
-    
-    Returns a dict with these keys:
-        f0_contour: list of {time, hz, confidence, voiced} — downsampled to ~10Hz
-        voiced_ratio: 0..1 — fraction of audio with a clear single fundamental
-        stability_score: 0..1 — inverse of frame-to-frame f0 jitter (higher = more stable)
-        drift_cents: float — mean deviation from local tonic in cents (signed)
-        off_pitch_segments: list of {time, duration, deviation_cents, confidence}
-        vibrato: {
-            detected: bool,
-            rate_hz: float or null,
-            extent_cents: float or null,
-            segments: [{time, duration, rate_hz, extent_cents}]
-        }
-    
-    On strummed/polyphonic audio, voiced_ratio will be low (typically <0.3)
-    and consumers should downweight pitch-specific claims accordingly.
     """
     import librosa
     import numpy as np
     
-    # PYIN with librosa defaults (C2 65Hz to C7 2093Hz)
     try:
         f0, voiced_flag, voiced_prob = librosa.pyin(
             y,
@@ -588,22 +549,17 @@ def _pyin_analysis(y, sr):
     hop_length = 512
     frames_per_second = sr / hop_length
     
-    # Confidence threshold for treating a frame as usable pitch data
     CONF_THRESHOLD = 0.7
     
-    # Voiced ratio: fraction of frames with confident fundamental
     reliable_mask = np.array([
         bool(vf) and vp >= CONF_THRESHOLD and f is not None and not np.isnan(f)
         for vf, vp, f in zip(voiced_flag, voiced_prob, f0)
     ])
     voiced_ratio = float(np.mean(reliable_mask)) if len(reliable_mask) > 0 else 0.0
     
-    # If essentially no reliable pitch data, return empty analysis early
     if voiced_ratio < 0.05:
         return _empty_pitch_analysis(voiced_ratio=voiced_ratio)
     
-    # Downsample contour to ~10Hz for Claude's consumption (not every frame)
-    # Full resolution stays available via numpy calculations below
     contour = []
     step = max(1, int(frames_per_second / 10))
     for i in range(0, len(f0), step):
@@ -619,28 +575,21 @@ def _pyin_analysis(y, sr):
                 "voiced": True,
             })
     
-    # Only compute derived metrics on reliable frames
     reliable_f0 = np.array([f for f, m in zip(f0, reliable_mask) if m])
     reliable_times = np.array([
         i / frames_per_second for i, m in enumerate(reliable_mask) if m
     ])
     
-    # Stability: inverse of normalized frame-to-frame jitter in cents
-    # Convert to cents first (log scale is how we hear pitch)
     stability_score = 0.5
     if len(reliable_f0) > 10:
         cents = 1200 * np.log2(reliable_f0 / 440.0)
-        # Jitter = std of frame-to-frame differences
         diffs = np.abs(np.diff(cents))
-        # Discard huge jumps (>200 cents) as note transitions, not instability
         note_transitions = diffs > 200
         jitter_diffs = diffs[~note_transitions]
         if len(jitter_diffs) > 0:
             mean_jitter = float(np.mean(jitter_diffs))
-            # 0 cents jitter = perfect (1.0), 50+ cents = unstable (0.0)
             stability_score = max(0.0, min(1.0, 1.0 - mean_jitter / 50.0))
     
-    # Drift: mean deviation from nearest semitone in cents (signed)
     drift_cents = 0.0
     if len(reliable_f0) > 0:
         cents = 1200 * np.log2(reliable_f0 / 440.0)
@@ -648,8 +597,6 @@ def _pyin_analysis(y, sr):
         deviations = cents - nearest_semi
         drift_cents = round(float(np.mean(deviations)), 1)
     
-    # Off-pitch segments: sustained regions where deviation from nearest semitone
-    # exceeds 25 cents for at least 200ms
     off_pitch_segments = _detect_off_pitch_segments(
         f0, voiced_flag, voiced_prob,
         frames_per_second=frames_per_second,
@@ -658,7 +605,6 @@ def _pyin_analysis(y, sr):
         conf_threshold=CONF_THRESHOLD,
     )
     
-    # Vibrato: detect sustained notes and analyze f0 oscillation within
     vibrato = _detect_vibrato(
         f0, voiced_flag, voiced_prob,
         frames_per_second=frames_per_second,
@@ -695,10 +641,7 @@ def _empty_pitch_analysis(voiced_ratio=0.0):
 def _detect_off_pitch_segments(f0, voiced_flag, voiced_prob, frames_per_second,
                                 deviation_threshold_cents=25, min_duration_s=0.2,
                                 conf_threshold=0.7):
-    """
-    Find continuous segments where the performer sustained a note off-pitch.
-    Returns list of {time, duration, deviation_cents, confidence}.
-    """
+    """Find continuous segments where the performer sustained a note off-pitch."""
     import numpy as np
     
     min_frames = int(min_duration_s * frames_per_second)
@@ -709,7 +652,6 @@ def _detect_off_pitch_segments(f0, voiced_flag, voiced_prob, frames_per_second,
     
     for i, (hz, vf, vp) in enumerate(zip(f0, voiced_flag, voiced_prob)):
         if hz is None or np.isnan(hz) or not vf or vp < conf_threshold:
-            # End of segment if we had one building
             if current_start is not None and len(current_devs) >= min_frames:
                 _flush_segment(segments, current_start, current_devs, current_confs, frames_per_second)
             current_start = None
@@ -733,11 +675,9 @@ def _detect_off_pitch_segments(f0, voiced_flag, voiced_prob, frames_per_second,
             current_devs = []
             current_confs = []
     
-    # Flush any trailing segment
     if current_start is not None and len(current_devs) >= min_frames:
         _flush_segment(segments, current_start, current_devs, current_confs, frames_per_second)
     
-    # Cap at 15 segments to keep prompt size reasonable
     return segments[:15]
 
 
@@ -758,15 +698,7 @@ def _flush_segment(segments, start_frame, devs, confs, frames_per_second):
 
 def _detect_vibrato(f0, voiced_flag, voiced_prob, frames_per_second,
                      conf_threshold=0.7, min_sustained_s=0.4):
-    """
-    Detect vibrato in sustained notes.
-    Returns {detected, rate_hz, extent_cents, segments}.
-    
-    Algorithm:
-    1. Find sustained voiced regions of at least min_sustained_s
-    2. For each region, check if f0 oscillates periodically around a mean
-    3. Measure rate (Hz) and extent (cents) via autocorrelation on the detrended signal
-    """
+    """Detect vibrato in sustained notes."""
     import numpy as np
     
     min_frames = int(min_sustained_s * frames_per_second)
@@ -802,26 +734,20 @@ def _detect_vibrato(f0, voiced_flag, voiced_prob, frames_per_second,
         if len(region_f0) < min_frames:
             continue
         
-        # Convert to cents relative to region mean
         mean_hz = np.mean(region_f0)
         if mean_hz <= 0:
             continue
         cents = 1200 * np.log2(region_f0 / mean_hz)
         
-        # Detrend to isolate oscillation
         cents_detrended = cents - np.mean(cents)
         
-        # Extent: half the peak-to-peak range (amplitude of oscillation)
         extent_cents = float((np.max(cents_detrended) - np.min(cents_detrended)) / 2.0)
         
-        # Reject if barely any oscillation (<10 cents extent is not vibrato)
         if extent_cents < 10:
             continue
         
-        # Rate: autocorrelation peak detection
         rate_hz = _estimate_oscillation_rate(cents_detrended, frames_per_second)
         
-        # Vibrato is typically 3-9 Hz. Outside that range it's not musical vibrato.
         if rate_hz is None or rate_hz < 3.0 or rate_hz > 9.0:
             continue
         
@@ -849,21 +775,17 @@ def _detect_vibrato(f0, voiced_flag, voiced_prob, frames_per_second,
         "detected": True,
         "rate_hz": round(float(np.mean(rates)), 2),
         "extent_cents": round(float(np.mean(extents)), 1),
-        "segments": segments[:10],  # cap for prompt size
+        "segments": segments[:10],
     }
 
 
 def _estimate_oscillation_rate(signal, frames_per_second):
-    """
-    Estimate dominant oscillation rate via autocorrelation.
-    Returns rate in Hz or None if no clear peak in the 3-9 Hz band.
-    """
+    """Estimate dominant oscillation rate via autocorrelation."""
     import numpy as np
     
     if len(signal) < 20:
         return None
     
-    # Autocorrelate
     sig = signal - np.mean(signal)
     if np.std(sig) == 0:
         return None
@@ -872,9 +794,8 @@ def _estimate_oscillation_rate(signal, frames_per_second):
     acf = acf[len(acf) // 2:]
     acf = acf / acf[0] if acf[0] != 0 else acf
     
-    # Look for peaks in lag range corresponding to 3-9 Hz
-    min_lag = int(frames_per_second / 9.0)  # fastest: 9 Hz
-    max_lag = int(frames_per_second / 3.0)  # slowest: 3 Hz
+    min_lag = int(frames_per_second / 9.0)
+    max_lag = int(frames_per_second / 3.0)
     
     if max_lag >= len(acf):
         max_lag = len(acf) - 1
@@ -888,7 +809,6 @@ def _estimate_oscillation_rate(signal, frames_per_second):
     peak_lag = int(np.argmax(search_region)) + min_lag
     peak_val = float(acf[peak_lag])
     
-    # Require a reasonably strong periodic component
     if peak_val < 0.3:
         return None
     
@@ -905,14 +825,12 @@ def analyze_stem(wav_path):
     y, sr = librosa.load(wav_path, sr=22050)
     duration = librosa.get_duration(y=y, sr=sr)
     
-    # --- Chroma / chord detection ---
     chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=512)
     pitch_classes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
     
     hop_length = 512
     frames_per_second = sr / hop_length
     
-    # Per-second dominant pitch
     pitches_per_second = []
     for i in range(0, chroma.shape[1], max(1, int(frames_per_second))):
         dominant_idx = int(np.argmax(chroma[:, i]))
@@ -923,22 +841,16 @@ def analyze_stem(wav_path):
             "confidence": round(float(chroma[dominant_idx, i]), 3),
         })
     
-    # --- Overall key detection ---
     chroma_mean = np.mean(chroma, axis=1)
     detected_key = pitch_classes[int(np.argmax(chroma_mean))]
     key_confidence = round(float(np.max(chroma_mean)), 3)
     
-    # --- Onset / timing analysis ---
     onset_frames = librosa.onset.onset_detect(y=y, sr=sr, hop_length=512)
     onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=512)
     
-    # BPM: use librosa's beat tracker, not onset intervals
-    # beat_track is designed for actual tempo detection and handles
-    # arpeggiated/fingerpicked playing correctly
     tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=512)
     avg_bpm = round(float(tempo) if not hasattr(tempo, '__len__') else float(tempo[0]), 1)
     
-    # Timing regularity: std of inter-beat intervals (not inter-onset)
     if len(beat_frames) > 1:
         beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=512)
         beat_intervals = np.diff(beat_times)
@@ -949,46 +861,31 @@ def analyze_stem(wav_path):
     else:
         timing_consistency = 0.0
     
-    # --- RMS energy (dynamics) ---
     rms = librosa.feature.rms(y=y, hop_length=512)[0]
     avg_rms = round(float(np.mean(rms)), 4)
     dynamic_range = round(float(np.max(rms) - np.min(rms)), 4)
     
-    # Perceptual tempo correction: fingerpicked ballads often register at
-    # double BPM because Librosa counts every pluck as a beat.
-    # If BPM > 150 and the track is low-energy, halve it.
     if avg_bpm > 150 and avg_rms < 0.02:
         avg_bpm = round(avg_bpm / 2, 1)
     
-    # --- Spectral features (tone quality) ---
     spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=512)[0]
     avg_brightness = round(float(np.mean(spectral_centroid)), 1)
     
-    # --- Technique identification ---
-    # Detect playing style from onset and spectral characteristics
     onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=512)
     
-    # Strumming vs single note: strumming has wider spectral spread per onset
     spectral_bandwidth = librosa.feature.spectral_bandwidth(y=y, sr=sr, hop_length=512)[0]
     avg_bandwidth = float(np.mean(spectral_bandwidth))
     
-    # Onset sharpness: picks have sharper attacks than fingers
     if len(onset_frames) > 0:
         onset_strengths = onset_env[onset_frames] if len(onset_frames) <= len(onset_env) else onset_env[:len(onset_frames)]
         avg_onset_strength = float(np.mean(onset_strengths)) if len(onset_strengths) > 0 else 0
     else:
         avg_onset_strength = 0
     
-    # Spectral rolloff: fingerpicking tends to have lower rolloff (warmer tone)
     spectral_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr, hop_length=512)[0]
     avg_rolloff = float(np.mean(spectral_rolloff))
     
-    # Classify technique
-    # High bandwidth + high onset strength = strumming with pick
-    # High bandwidth + low onset strength = strumming with fingers
-    # Low bandwidth + high onset strength = single notes with pick
-    # Low bandwidth + low onset strength = fingerpicking
-    bandwidth_threshold = 1800  # Hz
+    bandwidth_threshold = 1800
     strength_threshold = 1.5
     
     if avg_bandwidth > bandwidth_threshold:
@@ -1002,36 +899,25 @@ def analyze_stem(wav_path):
         else:
             technique = "fingerpicking"
     
-    # --- Vocal presence detection ---
-    # Use spectral features to detect vocal-range energy (80Hz-1100Hz fundamental)
-    # and vocal formant presence
     mel_spec = librosa.feature.melspectrogram(y=y, sr=sr, hop_length=512, n_mels=128)
     mel_db = librosa.power_to_db(mel_spec, ref=np.max)
     
-    # Vocal range bins (approximate: 80-1100Hz maps to mel bins ~5-40 at sr=22050)
     vocal_energy = np.mean(mel_db[5:40, :], axis=0)
     instrument_energy = np.mean(mel_db[40:, :], axis=0)
     
-    # Detect segments where vocal energy is prominent
     vocal_ratio = float(np.mean(vocal_energy)) / (float(np.mean(instrument_energy)) + 1e-6)
-    has_vocals = vocal_ratio > 0.8  # vocals detected if ratio is high enough
+    has_vocals = vocal_ratio > 0.8
     
-    # Vocal-instrument coordination: compare onset timing patterns
-    # in vocal vs instrument frequency ranges
     if has_vocals:
-        # Measure correlation between vocal and instrument energy over time
         if len(vocal_energy) > 1 and len(instrument_energy) > 1:
             min_len = min(len(vocal_energy), len(instrument_energy))
             correlation = float(np.corrcoef(vocal_energy[:min_len], instrument_energy[:min_len])[0, 1])
-            coordination_score = round(max(0, min(1, (correlation + 1) / 2)), 3)  # normalize -1..1 to 0..1
+            coordination_score = round(max(0, min(1, (correlation + 1) / 2)), 3)
         else:
             coordination_score = 0.5
     else:
-        coordination_score = None  # no vocals detected
+        coordination_score = None
     
-    # --- PYIN pitch analysis ---
-    # Runs on the full mix. voiced_ratio will naturally be low for strummed
-    # polyphonic audio, high for vocals and monophonic playing.
     pitch_analysis = _pyin_analysis(y, sr)
     
     return {
@@ -1098,13 +984,8 @@ def test_replicate():
         input_path = tmp.name
     
     try:
-        # 1. Extract audio
         wav_path = extract_audio(input_path, sr=44100, mono=False)
-        
-        # 2. Upload for Replicate
         audio_url = upload_for_replicate(wav_path)
-        
-        # 3. Call Replicate Demucs
         output, predict_time = separate_stems_replicate(audio_url)
         
         return jsonify({
@@ -1154,7 +1035,6 @@ def test_ytdlp():
     if request.method == "OPTIONS":
         return '', 200
     
-    # Accept song query via POST JSON or GET query param
     if request.method == "POST":
         data = request.get_json(silent=True) or {}
         query = data.get("query", "Hey There Delilah Plain White T's")
@@ -1166,27 +1046,24 @@ def test_ytdlp():
     try:
         t0 = time.time()
         
-        # Step 1: Search and download audio only, max 30 seconds
         cmd = [
             "yt-dlp",
-            "-x",                          # extract audio only
-            "--audio-format", "wav",        # convert to wav
-            "--audio-quality", "0",         # best quality
-            "-o", f"{output_path}.%(ext)s", # output template
-            "--no-playlist",                # single video only
-            "--match-filter", "duration < 600",  # skip videos > 10 min
-            "--postprocessor-args", "ffmpeg:-t 30",  # only keep first 30 seconds
-            f"ytsearch1:{query}",           # search YouTube, take first result
+            "-x",
+            "--audio-format", "wav",
+            "--audio-quality", "0",
+            "-o", f"{output_path}.%(ext)s",
+            "--no-playlist",
+            "--match-filter", "duration < 600",
+            "--postprocessor-args", "ffmpeg:-t 30",
+            f"ytsearch1:{query}",
         ]
         
         logger.info(f"Running yt-dlp with query: {query}")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         t1 = time.time()
         
-        # Check for output file
         wav_path = f"{output_path}.wav"
         if not os.path.exists(wav_path):
-            # yt-dlp might have used a different extension
             import glob
             matches = glob.glob(f"{output_path}.*")
             return jsonify({
@@ -1201,7 +1078,6 @@ def test_ytdlp():
         
         file_size = os.path.getsize(wav_path)
         
-        # Step 2: Quick Librosa check on the downloaded audio
         import librosa
         import numpy as np
         
@@ -1253,7 +1129,6 @@ def test_deezer():
     try:
         t0 = time.time()
         
-        # Step 1: Search Deezer
         logger.info(f"Searching Deezer for: {query}")
         search_resp = http_requests.get(
             "https://api.deezer.com/search",
@@ -1286,7 +1161,6 @@ def test_deezer():
         
         t1 = time.time()
         
-        # Step 2: Download the 30s preview MP3
         logger.info(f"Downloading preview: {preview_url}")
         preview_path = f"/tmp/deezer_preview_{int(time.time())}.mp3"
         dl_resp = http_requests.get(preview_url, timeout=30)
@@ -1297,7 +1171,6 @@ def test_deezer():
         preview_size = os.path.getsize(preview_path)
         t2 = time.time()
         
-        # Step 3: Convert to WAV and run Librosa
         wav_path = preview_path + ".wav"
         subprocess.run(
             ["ffmpeg", "-i", preview_path, "-ar", "22050", "-ac", "1", "-y", wav_path],
@@ -1389,7 +1262,7 @@ def analyze():
     
     # Verify JWT if provided (optional auth)
     auth_header = request.headers.get("Authorization", "")
-    user_id, auth_error = verify_supabase_jwt(auth_header)
+    user_id, user_email, auth_error = verify_supabase_jwt(auth_header)
     if auth_header and auth_error:
         return jsonify({"error": f"Authentication failed: {auth_error}"}), 401
     
@@ -1406,13 +1279,11 @@ def analyze():
     try:
         t0 = time.time()
         
-        # Step 1: Extract audio (capped at 60s - enough for full scoring, keeps Demucs fast)
         logger.info("Step 1: Extracting audio with FFmpeg (max 60s)...")
         wav_path = extract_audio(input_path, sr=44100, mono=False, max_duration=60)
         temp_files.append(wav_path)
         t1 = time.time()
         
-        # Check if solo performance (skip Demucs) or full mix (use Demucs)
         solo_performance = request.form.get("solo_performance", "true").lower() in ("true", "1", "yes")
         
         vocals_url = None
@@ -1423,10 +1294,8 @@ def analyze():
         demucs_time = 0
         
         if solo_performance:
-            # Solo performance: skip Demucs, analyze raw audio directly
             logger.info("Step 2: Solo performance - skipping Demucs, analyzing raw audio...")
             
-            # Convert to mono 22050 for Librosa
             analysis_wav = wav_path + ".analysis.wav"
             temp_files.append(analysis_wav)
             subprocess.run(
@@ -1435,13 +1304,11 @@ def analyze():
             )
             t2 = time.time()
         else:
-            # Full mix: use Demucs for stem separation
             logger.info("Step 2: Uploading to Replicate Demucs...")
             audio_url = upload_for_replicate(wav_path)
             stems_output, demucs_time = separate_stems_replicate(audio_url)
             t2 = time.time()
             
-            # Parse Demucs output
             logger.info(f"Step 3: Demucs output: {stems_output}")
             
             vocals_url = stems_output.get("vocals") if isinstance(stems_output, dict) else None
@@ -1457,7 +1324,6 @@ def analyze():
                     "demucs_output": str(stems_output),
                 }), 500
             
-            # Download instrument stem and convert for Librosa
             logger.info("Step 4: Downloading instrument stem for Librosa analysis...")
             stem_path = tempfile.mktemp(suffix=".wav")
             temp_files.append(stem_path)
@@ -1474,20 +1340,16 @@ def analyze():
         metrics = analyze_stem(analysis_wav)
         t3 = time.time()
         
-        # Step 6: Calculate deterministic scores from metrics
         logger.info("Step 6: Calculating scores...")
         from scoring import calculate_scores
         
-        # Get reference mode from request
         ref_mode = request.form.get("reference_weighting", "creative").lower()
         song_title = request.form.get("song_title", "")
         song_artist = request.form.get("song_artist", "")
         
-        # If strict mode and song info provided, look up reference
         reference_analysis = None
         reference_track = None
         if ref_mode == "strict" and song_title:
-            # Step 6a: Check for user-uploaded reference track
             if "reference_file" in request.files:
                 logger.info("Using user-uploaded reference track...")
                 ref_file = request.files["reference_file"]
@@ -1504,13 +1366,11 @@ def analyze():
                 reference_analysis = analyze_stem(ref_wav)
                 reference_track = {"title": song_title, "artist": song_artist, "source": "user_upload"}
             else:
-                # Step 6b: Check Supabase cache
                 cached = get_cached_reference(song_title, song_artist)
                 if cached:
                     reference_analysis = cached
                     reference_track = {"title": song_title, "artist": song_artist, "source": "cache"}
                 else:
-                    # Step 6c: Cache miss - fetch from Deezer, analyze, cache
                     logger.info("Fetching Deezer reference for strict mode scoring...")
                     deezer_ref = fetch_deezer_reference(song_title, song_artist)
                     if deezer_ref:
@@ -1525,7 +1385,6 @@ def analyze():
         scores = calculate_scores(metrics, reference_analysis=reference_analysis, mode=ref_mode, skill_level=skill_level)
         t4 = time.time()
         
-        # Step 7: Visual analysis via Claude Vision (runs on original video, not audio)
         visual_analysis = None
         from visual import analyze_video
         instrument = request.form.get("instrument", "")
@@ -1533,7 +1392,6 @@ def analyze():
         visual_analysis = analyze_video(input_path, instrument=instrument)
         t_visual = time.time()
 
-        # Step 7b: Whisper transcription (if vocals selected and OpenAI key available)
         lyrics_transcript = None
         if OPENAI_API_KEY and "vocal" in instrument.lower():
             try:
@@ -1550,7 +1408,6 @@ def analyze():
             except Exception as e:
                 logger.warning(f"Whisper transcription failed: {e}")
         
-        # Step 8: Generate Claude feedback (optional - skip if no API key)
         feedback = None
         from feedback import generate_feedback, ANTHROPIC_API_KEY as _ak
         if _ak:
@@ -1585,7 +1442,8 @@ def analyze():
         try:
             from datetime import datetime, timezone
             submission_data = {
-                "user_id": user_id,  # None for anonymous; populated for authenticated
+                "user_id": user_id,
+                "submitter_name": (user_email.split("@")[0] if user_email else "Anonymous"),
                 "song_title": song_title,
                 "song_artist": song_artist,
                 "skill_level": request.form.get("skill_level", "Intermediate"),
