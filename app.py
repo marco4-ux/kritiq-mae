@@ -135,10 +135,17 @@ def warmup():
             }
         }
         
+        resp = http_requests.post(
+            "https://api.replicate.com/v1/predictions",
+            headers=headers,
+            json=payload,
+            timeout=15,
+        )
         if resp.status_code == 429:
-    return jsonify({"status": "skipped", "message": "Replicate rate limited, skipping warmup"}), 200
-resp.raise_for_status()
-        
+            return jsonify({"status": "skipped", "message": "Replicate rate limited, skipping warmup"}), 200
+        resp.raise_for_status()
+        prediction = resp.json()
+
         return jsonify({
             "status": "ok",
             "message": "Warmup request sent - GPU will be ready in ~30-60s",
