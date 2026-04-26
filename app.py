@@ -135,14 +135,9 @@ def warmup():
             }
         }
         
-        resp = http_requests.post(
-            "https://api.replicate.com/v1/predictions",
-            headers=headers,
-            json=payload,
-            timeout=15,
-        )
-        resp.raise_for_status()
-        prediction = resp.json()
+        if resp.status_code == 429:
+    return jsonify({"status": "skipped", "message": "Replicate rate limited, skipping warmup"}), 200
+resp.raise_for_status()
         
         return jsonify({
             "status": "ok",
@@ -1528,7 +1523,7 @@ def analyze():
                         file=audio_file,
                     )
                 lyrics_transcript = transcript.text
-                logger.info(f"Whisper transcript: {lyrics_transcript[:100]}...")
+                logger.info(f"Whisper transcript ({len(lyrics_transcript)} chars): {lyrics_transcript}")
             except Exception as e:
                 logger.warning(f"Whisper transcription failed: {e}")
         
