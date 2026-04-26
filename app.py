@@ -24,6 +24,59 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 import jwt as pyjwt
 
+# ─── Phase 4.5: Song Critique Mode mapping ───────────────────────────
+# Maps the new form field to:
+#   - critique_mode: the canonical mode name passed to feedback.py
+#   - reference_weighting: scoring mode, derived from critique mode (no longer
+#     a separate user-facing choice)
+SONG_CRITIQUE_MODE_MAP = {
+    "Cover Band Mode":     {"reference_weighting": "Strict",   "scoring_mode": "strict"},
+    "New Cover Mode":      {"reference_weighting": "Creative", "scoring_mode": "creative"},
+    "Original Track Mode": {"reference_weighting": "None",     "scoring_mode": "creative"},
+}
+
+# Legacy `style` values from Phase 4 and earlier — mapped to new modes for
+# backward compatibility while the frontend transitions.
+LEGACY_STYLE_TO_CRITIQUE_MODE = {
+    "Original Style": "Cover Band Mode",
+    "Interpretation": "New Cover Mode",
+    "Original Song":  "Original Track Mode",
+}
+
+DEFAULT_CRITIQUE_MODE = "Cover Band Mode"
+
+
+def resolve_song_critique_mode(form) -> str:
+    """
+    Read the song critique mode from the request form, with backward-compat
+    fallback to the legacy `style` field.
+
+    Returns one of: "Cover Band Mode", "New Cover Mode", "Original Track Mode".
+    """
+    new_value = form.get("song_critique_mode", "").strip()
+    if new_value in SONG_CRITIQUE_MODE_MAP:
+        return new_value
+
+    # Backward compatibility: accept legacy `style` field
+    legacy_style = form.get("style", "").strip()
+    if legacy_style in SONG_CRITIQUE_MODE_MAP:
+        # Legacy field is already using a new value — accept it
+        return legacy_style
+    if legacy_style in LEGACY_STYLE_TO_CRITIQUE_MODE:
+        mapped = LEGACY_STYLE_TO_CRITIQUE_MODE[legacy_style]
+        logger.info(f"Mapped legacy style '{legacy_style}' to critique mode '{mapped}'")
+        return mapped
+
+    logger.info(f"No valid song_critique_mode or style found, defaulting to {DEFAULT_CRITIQUE_MODE}")
+    return DEFAULT_CRITIQUE_MODE
+
+
+def parse_audio_only_flag(form) -> bool:
+    """Return True if the submission is an audio-only upload (no video)."""
+    val = form.get("audio_only", "false").strip().lower()
+    return val in ("true", "1", "yes", "on")
+
+
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
@@ -105,7 +158,9 @@ def warmup():
 # ─── Helper: Extract audio from video via FFmpeg ─────────────────────
 
 def extract_audio(input_path, sr=44100, mono=True, max_duration=None):
-    """Extract audio from video/audio file, return path to WAV."""
+    """Extract audio from video/audio file, return path to WAV.
+    Works on both video and audio inputs — FFmpeg transcodes either to WAV.
+    """
     wav_path = input_path + ".wav"
     cmd = ["ffmpeg", "-i", input_path, "-ar", str(sr)]
     if mono:
@@ -377,16 +432,21 @@ def save_submission(data: dict) -> str:
             return performance_id
         
         try:
+            # NOTE: column names retained for back-compat with existing 193 rows.
+            #   - DB column `style` holds the song_critique_mode value.
+            #   - DB column `intentional_choices` holds the creative_choices value.
+            #   - DB column `harshness` is hardcoded to "Unified" post-Phase 4.5.
+            #   - DB column `influence` is no longer populated (UI removed).
             submission_payload = {
                 "user_id": user_id,
                 "song_id": song_id,
                 "skill_level": data.get("skill_level"),
-                "harshness": data.get("harshness"),
-                "style": data.get("style"),
+                "harshness": data.get("harshness", "Unified"),
+                "style": data.get("song_critique_mode") or data.get("style"),
                 "genre": data.get("genre"),
                 "environment": data.get("environment"),
-                "intentional_choices": data.get("intentional_choices"),
-                "influence": data.get("influence"),
+                "intentional_choices": data.get("creative_choices") or data.get("intentional_choices"),
+                "influence": None,
                 "reference_weighting": data.get("reference_weighting"),
                 "stems": data.get("stems"),
                 "performance_analysis": data.get("performance_analysis"),
@@ -1261,15 +1321,19 @@ def search_songs():
 @app.route("/analyze", methods=["POST", "OPTIONS"])
 def analyze():
     """
-    Full MAE pipeline:
-    1. Upload video/audio → FFmpeg extracts WAV
-    2. WAV → Replicate Demucs → separated stems (vocals, no_vocals/other)
-    3. Instrument stem → Librosa analysis → structured metrics
-    4. Return JSON with all metrics + stem URLs
-    
-    Auth behavior:
-    - No Authorization header: anonymous path, writes to `performances` only
-    - Valid JWT: authenticated path, writes to both `performances` and `submissions`
+    Phase 4.5 MAE pipeline:
+    1. Resolve song_critique_mode (with backward-compat fallback to legacy `style`)
+    2. Derive scoring mode from critique mode
+    3. Upload media → FFmpeg extracts audio (works for video or audio-only)
+    4. Solo-performance Librosa analysis (Demucs path retained but inactive)
+    5. Reference comparison (Cover Band / New Cover only — skipped for Original Track)
+    6. Scoring + Whisper (vocals only) + Visual analysis (skipped for audio-only)
+    7. Claude feedback (single unified persona, scaled by skill_level)
+    8. Save submission
+
+    Auth behavior unchanged from Phase 4:
+    - No Authorization header: anonymous, writes to `performances` only
+    - Valid JWT: authenticated, writes to both `performances` and `submissions`
     - Invalid JWT: 401 (no silent fallback to anonymous)
     """
     if request.method == "OPTIONS":
@@ -1283,6 +1347,19 @@ def analyze():
     
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
+
+    # ─── Phase 4.5: resolve mode + audio-only flag up front ─────────
+    song_critique_mode = resolve_song_critique_mode(request.form)
+    mode_config = SONG_CRITIQUE_MODE_MAP[song_critique_mode]
+    ref_mode = mode_config["scoring_mode"]            # "strict" or "creative" — passed to scoring.py
+    reference_weighting_db = mode_config["reference_weighting"]  # "Strict", "Creative", or "None" — written to DB
+
+    audio_only = parse_audio_only_flag(request.form)
+
+    logger.info(
+        f"Submission: critique_mode={song_critique_mode}, "
+        f"scoring_mode={ref_mode}, audio_only={audio_only}, user_id={user_id}"
+    )
     
     file = request.files["file"]
     with tempfile.NamedTemporaryFile(suffix=".upload", delete=False) as tmp:
@@ -1356,16 +1433,23 @@ def analyze():
         gc.collect()
         t3 = time.time()
         
-        logger.info("Step 6: Calculating scores...")
+        # ─── Step 6: Reference comparison ───────────────────────────
+        # Cover Band Mode + New Cover Mode pull a reference for context.
+        # Original Track Mode SKIPS reference fetching entirely — there is
+        # no published reference recording for an original composition.
+        logger.info(f"Step 6: Resolving reference (critique_mode={song_critique_mode})...")
         from scoring import calculate_scores
         
-        ref_mode = request.form.get("reference_weighting", "creative").lower()
         song_title = request.form.get("song_title", "")
         song_artist = request.form.get("song_artist", "")
         
         reference_analysis = None
         reference_track = None
-        if ref_mode == "strict" and song_title:
+
+        if song_critique_mode == "Original Track Mode":
+            logger.info("Original Track Mode — skipping reference fetch entirely")
+        elif ref_mode == "strict" and song_title:
+            # Cover Band Mode — pull reference for strict comparison
             if "reference_file" in request.files:
                 logger.info("Using user-uploaded reference track...")
                 ref_file = request.files["reference_file"]
@@ -1397,18 +1481,41 @@ def analyze():
                     else:
                         logger.info("No Deezer reference found, falling back to creative mode")
                         ref_mode = "creative"
-        
+        elif ref_mode == "creative" and song_title:
+            # New Cover Mode — pull reference for context only (scoring stays creative)
+            cached = get_cached_reference(song_title, song_artist)
+            if cached:
+                reference_analysis = cached
+                reference_track = {"title": song_title, "artist": song_artist, "source": "cache"}
+            else:
+                logger.info("Fetching Deezer reference for New Cover context...")
+                deezer_ref = fetch_deezer_reference(song_title, song_artist)
+                if deezer_ref:
+                    reference_analysis = deezer_ref["analysis"]
+                    reference_track = deezer_ref["track"]
+                    cache_song_reference(reference_track, reference_analysis)
+
         skill_level = request.form.get("skill_level", "Intermediate")
         scores = calculate_scores(metrics, reference_analysis=reference_analysis, mode=ref_mode, skill_level=skill_level)
         t4 = time.time()
         
+        # ─── Step 7: Visual analysis ────────────────────────────────
+        # Skipped entirely for audio-only submissions.
         visual_analysis = None
-        from visual import analyze_video
         instrument = request.form.get("instrument", "")
-        logger.info("Step 7: Running visual analysis on video frames...")
-        visual_analysis = analyze_video(input_path, instrument=instrument)
-        t_visual = time.time()
 
+        if audio_only:
+            logger.info("Step 7: Audio-only submission — skipping visual analysis")
+            t_visual = t4
+        else:
+            from visual import analyze_video
+            logger.info("Step 7: Running visual analysis on video frames...")
+            visual_analysis = analyze_video(input_path, instrument=instrument)
+            t_visual = time.time()
+
+        # ─── Step 7b: Whisper transcription (vocals only, audio path) ───
+        # Whisper runs on the analysis_wav regardless of whether the source
+        # was video or audio — same audio data either way.
         lyrics_transcript = None
         if OPENAI_API_KEY and "vocal" in instrument.lower():
             try:
@@ -1425,36 +1532,42 @@ def analyze():
             except Exception as e:
                 logger.warning(f"Whisper transcription failed: {e}")
         
+        # ─── Step 8: Claude feedback (Phase 4.5: unified persona) ───
         feedback = None
         from feedback import generate_feedback, ANTHROPIC_API_KEY as _ak
         if _ak:
             logger.info("Step 8: Generating Claude feedback...")
             song_context = {
-                "title": request.form.get("song_title", "Unknown"),
-                "artist": request.form.get("song_artist", "Unknown"),
+                "title": song_title or "Unknown",
+                "artist": song_artist or "Unknown",
             }
+            # Phase 4.5 artist_context — `harshness` removed, `style` removed,
+            # `intentional_choices` renamed to `creative_choices`,
+            # `influence` removed (UI dropped).
+            creative_choices = (
+                request.form.get("creative_choices")
+                or request.form.get("intentional_choices", "")  # legacy fallback
+            )
             artist_context = {
-                "skill_level": request.form.get("skill_level", "Intermediate"),
-                "harshness": request.form.get("harshness", "Supportive Producer"),
+                "skill_level": skill_level,
                 "instrument": instrument,
                 "capo": request.form.get("capo", "none"),
-                "style": request.form.get("style", "Original Style"),
                 "genre": request.form.get("genre", ""),
                 "environment": request.form.get("environment", "Bedroom Tape"),
-                "intentional_choices": request.form.get("intentional_choices", ""),
-                "influence": request.form.get("influence", ""),
+                "creative_choices": creative_choices,
             }
             feedback = generate_feedback(
                 scores=scores,
                 analysis=metrics,
                 song_context=song_context,
                 artist_context=artist_context,
+                song_critique_mode=song_critique_mode,
                 visual_analysis=visual_analysis,
                 lyrics_transcript=lyrics_transcript,
             )
         t5 = time.time()
         
-        # Step 9: Save submission to Supabase (non-blocking, don't fail pipeline if this fails)
+        # ─── Step 9: Save submission ─────────────────────────────────
         submission_id = None
         try:
             from datetime import datetime, timezone
@@ -1463,14 +1576,13 @@ def analyze():
                 "submitter_name": (user_email.split("@")[0] if user_email else "Anonymous"),
                 "song_title": song_title,
                 "song_artist": song_artist,
-                "skill_level": request.form.get("skill_level", "Intermediate"),
-                "harshness": request.form.get("harshness", "Supportive Producer"),
-                "style": request.form.get("style", "Original Style"),
+                "skill_level": skill_level,
+                "harshness": "Unified",  # Phase 4.5 — persona system removed
+                "song_critique_mode": song_critique_mode,
                 "genre": request.form.get("genre"),
                 "environment": request.form.get("environment", "Bedroom Tape"),
-                "intentional_choices": request.form.get("intentional_choices"),
-                "influence": request.form.get("influence"),
-                "reference_weighting": ref_mode.capitalize(),
+                "creative_choices": creative_choices,
+                "reference_weighting": reference_weighting_db,
                 "stems": {
                     "vocals": vocals_url, "bass": bass_url,
                     "drums": drums_url, "other": other_url, "guitar": guitar_url,
@@ -1495,6 +1607,8 @@ def analyze():
         return jsonify({
             "status": "ok",
             "submission_id": submission_id,
+            "song_critique_mode": song_critique_mode,
+            "audio_only": audio_only,
             "pipeline_timing": {
                 "ffmpeg_seconds": round(t1 - t0, 2),
                 "demucs_seconds": round(t2 - t1, 2),
