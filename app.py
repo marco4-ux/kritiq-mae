@@ -141,11 +141,9 @@ def warmup():
             json=payload,
             timeout=15,
         )
-        if resp.status_code == 429:
-            return jsonify({"status": "skipped", "message": "Replicate rate limited, skipping warmup"}), 200
         resp.raise_for_status()
         prediction = resp.json()
-
+        
         return jsonify({
             "status": "ok",
             "message": "Warmup request sent - GPU will be ready in ~30-60s",
@@ -1449,7 +1447,31 @@ def analyze():
         reference_track = None
 
         if song_critique_mode == "Original Track Mode":
-            logger.info("Original Track Mode — skipping reference fetch entirely")
+            # Phase 4.5 follow-up: Original Track Mode now accepts a user-
+            # uploaded reference (e.g. their own studio version or demo).
+            # The reference is for Claude's context only — scoring stays
+            # purely creative because there's no published original to compare
+            # against, and judging an original composition against the user's
+            # own demo would create incoherent scoring semantics. The reference
+            # just gives Claude richer audio context for feedback generation.
+            if "reference_file" in request.files:
+                logger.info("Original Track Mode — using user-uploaded reference for context only")
+                ref_file = request.files["reference_file"]
+                ref_path = tempfile.mktemp(suffix=".upload_ref")
+                ref_file.save(ref_path)
+                temp_files.append(ref_path)
+
+                ref_wav = ref_path + ".wav"
+                temp_files.append(ref_wav)
+                subprocess.run(
+                    ["ffmpeg", "-i", ref_path, "-ar", "22050", "-ac", "1", "-y", ref_wav],
+                    capture_output=True, text=True, timeout=30,
+                )
+                reference_analysis = analyze_stem(ref_wav, lightweight=True)
+                gc.collect()
+                reference_track = {"title": song_title, "artist": song_artist, "source": "user_upload"}
+            else:
+                logger.info("Original Track Mode — no reference uploaded, scoring purely on internal consistency")
         elif ref_mode == "strict" and song_title:
             # Cover Band Mode — pull reference for strict comparison
             if "reference_file" in request.files:
@@ -1530,7 +1552,7 @@ def analyze():
                         file=audio_file,
                     )
                 lyrics_transcript = transcript.text
-                logger.info(f"Whisper transcript ({len(lyrics_transcript)} chars): {lyrics_transcript}")
+                logger.info(f"Whisper transcript: {lyrics_transcript[:100]}...")
             except Exception as e:
                 logger.warning(f"Whisper transcription failed: {e}")
         
