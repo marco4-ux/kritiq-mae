@@ -273,22 +273,30 @@ This is a faithful cover. The performer is attempting to reproduce the original 
 - A G-shape with a capo on fret 6 is a G-shape or a concert C#. It is NEVER a "G#"."""
     else:
         chord_naming_rule = """CHORD NAMING RULES:
-HEDGING IS MANDATORY. Your recall of specific chord progressions for songs is unreliable. Many songs you "know" the chords for, you actually don't — you're filling in plausible-sounding minor-key or major-key progressions from pattern matching. This produces confidently wrong chord names that mislead the performer. Do NOT do this.
 
-INSTEAD, frame all chord references as observations of what you HEAR in the audio, not assertions of what the song's published chart contains:
+Two distinct cases — handle them differently.
 
-- NOT "the changes from Fm to C to Dm" → YES "the changes I'm hearing — sounds like a minor voicing into a major and back to another minor"
-- NOT "your Am to F change at 0:30" → YES "the chord change around 0:30 — what sounds like a minor to a major shift"
-- NOT "you're playing the G chord cleanly" → YES "the chord at this moment sounds like a clean G voicing" or "this G-shape rings out clearly"
-- NOT "Billie Jean's Fm to C# progression" → YES "the song's main progression — what I'm hearing as a minor chord moving to a darker voicing"
+CASE 1: SINGLE CHORD AT A SPECIFIC MOMENT
+When referencing a single chord at a specific timestamp, you MAY name it directly and confidently. The audio analysis (chroma, key detection) gives you reasonable basis for individual chord identification at clear moments. Name single chords using standard chord names — e.g. "your G chord at 0:12 rings out cleanly" or "the Am voicing here sounds slightly muted."
 
-When you ARE confident about a chord (strong chroma signal, capo information explicit, common open chord shape audibly clear), you may name it directly — but always anchored to what you're hearing, never to what the song "uses." Phrases like "what I'm hearing as," "this sounds like," "appears to be a [chord] voicing," or "the [chord]-shape you're playing" are required.
+If the song has a capo, reference the SHAPE name with concert pitch in parentheses: "the G shape (Concert C#)" or "your Em shape (Concert Bbm)". A G-shape with capo on fret 6 is a G-shape or Concert C# — NEVER "G#".
 
-If you cannot identify a chord with confidence from the audio cues, describe its character (e.g. "a dark minor voicing," "a sustained suspended chord," "a chord that resolves down a step") rather than guessing a specific name.
+EVERY feedback item about guitar playing MUST reference at least one specific chord moment by name. Do not write generic guitar feedback like "the chord shapes could ring out" without naming which chord. Generic chord feedback is unhelpful — name the chord at the timestamp you're referencing.
 
-Reference 2-3 chord moments where you can hear the harmony clearly. EVERY feedback item about guitar playing must reference at least one chord moment, but the reference must be hedged per the rules above.
+CASE 2: CHORD PROGRESSIONS (MULTIPLE CHORDS IN SEQUENCE)
+Your recall of how songs progress between chords is UNRELIABLE. You routinely fabricate plausible-sounding minor-key or major-key progressions when asked about specific songs. Do NOT assert chord progressions from memory.
 
-If a capo is active, reference chords by their SHAPE name with concert pitch in parentheses. Example: "what sounds like a G shape (Concert C#) into an Em shape (Concert Bbm)". A G-shape with capo on fret 6 is a G-shape or Concert C# — NEVER "G#"."""
+When discussing how chords MOVE through the song, hedge:
+- NOT "the changes from Fm to C to Dm" → YES "the chord changes I'm hearing — what sounds like a minor-to-major shift"
+- NOT "Billie Jean's Fm to C# progression" → YES "the song's main progression — minor chords moving with a darker quality underneath"
+- NOT "your Am to F to G progression at 0:30" → YES "your chord movement around 0:30 — the minor-to-major-to-major shift"
+
+If you can identify TWO consecutive chords with confidence from clear chroma data and capo information, you may name both — but never assert a longer 3+ chord progression as "the song's progression." Two-chord transitions like "your G to D change at 0:15" are fine when the audio supports it. Three-or-more-chord assertions stop being audio-grounded and start being memory-based.
+
+SUMMARY:
+- Single chords at moments: name them confidently, with timestamps. Required in every guitar feedback item.
+- Two consecutive chord changes: name both if audio supports it.
+- Full progressions (3+ chords) or "the song's chord chart": hedge as "what I'm hearing" / describe the harmonic motion in character terms, never assert specific named progressions from memory."""
 
     # ─── Visual feedback section (conditional on whether visual_analysis is present) ──
     if visual_analysis is None:
