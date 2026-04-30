@@ -273,13 +273,22 @@ This is a faithful cover. The performer is attempting to reproduce the original 
 - A G-shape with a capo on fret 6 is a G-shape or a concert C#. It is NEVER a "G#"."""
     else:
         chord_naming_rule = """CHORD NAMING RULES:
-- Look up the known chord progression for the song title provided. Use standard chord chart names from sources like Ultimate Guitar.
-- Reference specific chord names FREQUENTLY throughout the feedback — when discussing transitions, name the actual chords involved (e.g. "the transition from G to Em to C flows smoothly" or "your Am to F change at 0:30 needs cleaner voicing").
-- If a capo is active, reference chords by their SHAPE name with concert pitch in parentheses. Example: "the G shape (Concert C#) to Em shape (Concert Bbm) transition"
-- Name at least 3-4 different chords across the full feedback. Don't just mention one chord — reference the actual progression the performer is playing.
-- EVERY feedback item about guitar playing MUST mention at least one specific chord by name. Do not write generic guitar feedback without naming which chord or chord transition you're referring to.
-- NEVER invent chord names from raw pitch data. Use the song's known chord chart. If you don't know the specific progression, describe the sound rather than guessing.
-- A G-shape with a capo on fret 6 is a G-shape or a concert C#. It is NEVER a "G#". Stick to real chord names from standard charts."""
+HEDGING IS MANDATORY. Your recall of specific chord progressions for songs is unreliable. Many songs you "know" the chords for, you actually don't — you're filling in plausible-sounding minor-key or major-key progressions from pattern matching. This produces confidently wrong chord names that mislead the performer. Do NOT do this.
+
+INSTEAD, frame all chord references as observations of what you HEAR in the audio, not assertions of what the song's published chart contains:
+
+- NOT "the changes from Fm to C to Dm" → YES "the changes I'm hearing — sounds like a minor voicing into a major and back to another minor"
+- NOT "your Am to F change at 0:30" → YES "the chord change around 0:30 — what sounds like a minor to a major shift"
+- NOT "you're playing the G chord cleanly" → YES "the chord at this moment sounds like a clean G voicing" or "this G-shape rings out clearly"
+- NOT "Billie Jean's Fm to C# progression" → YES "the song's main progression — what I'm hearing as a minor chord moving to a darker voicing"
+
+When you ARE confident about a chord (strong chroma signal, capo information explicit, common open chord shape audibly clear), you may name it directly — but always anchored to what you're hearing, never to what the song "uses." Phrases like "what I'm hearing as," "this sounds like," "appears to be a [chord] voicing," or "the [chord]-shape you're playing" are required.
+
+If you cannot identify a chord with confidence from the audio cues, describe its character (e.g. "a dark minor voicing," "a sustained suspended chord," "a chord that resolves down a step") rather than guessing a specific name.
+
+Reference 2-3 chord moments where you can hear the harmony clearly. EVERY feedback item about guitar playing must reference at least one chord moment, but the reference must be hedged per the rules above.
+
+If a capo is active, reference chords by their SHAPE name with concert pitch in parentheses. Example: "what sounds like a G shape (Concert C#) into an Em shape (Concert Bbm)". A G-shape with capo on fret 6 is a G-shape or Concert C# — NEVER "G#"."""
 
     # ─── Visual feedback section (conditional on whether visual_analysis is present) ──
     if visual_analysis is None:
