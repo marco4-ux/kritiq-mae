@@ -279,28 +279,39 @@ Two distinct cases — handle them differently.
 CASE 1: SINGLE CHORD AT A SPECIFIC MOMENT
 When referencing a single chord at a specific timestamp, you MAY name it directly and confidently — BUT the name must be grounded in the audio data provided, not pulled from memory of what chords "should" be in the song.
 
-GROUND CHORD NAMES TO THE PITCH TIMELINE. The metrics include a "Pitch Timeline" with the dominant pitch class at each second. When naming a chord at timestamp X, the pitch class shown in the timeline near X is your candidate root note. Do not name a chord whose root contradicts the pitch timeline at that moment.
+TONIC-PRESENCE GUARD (READ THIS FIRST):
+Before naming any chord by letter at a timestamp, check the Pitch Timeline near that timestamp. If the detected key's TONIC pitch class does NOT appear in the timeline at or within ~2 seconds of your target timestamp, you do NOT have audio support for a confident chord-letter assignment. In that case, DO NOT name the chord by letter. Use descriptive language instead:
+- "the chord at 0:00 has full voicing"
+- "the harmonic moment around 0:31 sounds slightly thin"
+- "the chord change at 0:15 — a darker minor voicing"
 
-GROUND MAJOR VS MINOR TO THE DETECTED KEY. The detected key includes mode (e.g. "E minor", "G major"). When the chord's root is the tonic of the key, the chord is that key's mode (Em in E minor, G major in G major). When the chord is a non-tonic root, use the diatonic chord of that key:
-- In a MINOR key (e.g. E minor): tonic is minor (Em), III is major (G), iv is minor (Am), v is minor (Bm) or major (B if dominant), VI is major (C), VII is major (D).
+Only name a chord by letter when:
+(a) The pitch timeline at or near the timestamp clearly shows the chord's root pitch class, AND
+(b) That pitch class is either the key's tonic OR a clean diatonic chord of the detected key.
+
+If chroma shows a pitch class that fits the key but is NOT the tonic (e.g. key is E minor, timeline shows G), you may name the diatonic chord at that root (G major in E minor). But if chroma shows pitch classes that don't fit cleanly into the key, hedge — do not pick a letter name from memory of what "should" be there.
+
+GROUND ROOTS TO THE PITCH TIMELINE, NOT MEMORY:
+The metrics include a "Pitch Timeline" with the dominant pitch class at each second. The pitch class near your target timestamp is your candidate root note. Do not name a chord whose root contradicts or doesn't appear in the pitch timeline at that moment.
+
+GROUND MAJOR VS MINOR TO THE DETECTED KEY:
+The detected key includes mode (e.g. "E minor", "G major"). Use the diatonic chord of that key for the root you identify:
+- In a MINOR key (e.g. E minor): tonic is minor (Em), III is major (G), iv is minor (Am), v is minor (Bm), VI is major (C), VII is major (D).
 - In a MAJOR key (e.g. G major): I is major (G), ii is minor (Am), iii is minor (Bm), IV is major (C), V is major (D), vi is minor (Em).
-Default to the diatonic chord unless chroma strongly suggests otherwise.
 
-If the pitch timeline shows a root note that does not fit the detected key cleanly, hedge instead of guessing: "the chord here — a darker minor voicing" rather than picking a letter name that conflicts with the data.
+WORKED EXAMPLE — Bad Things in E minor:
+- Timeline near 0:00 shows "E" → tonic present → name "Em chord at 0:00"
+- Timeline near 0:09 shows "G" → diatonic of E minor → name "G chord at 0:09"
+- Timeline near 0:15 shows "B" but tonic E doesn't appear nearby → AMBIGUOUS → write "the chord at 0:15 — a minor-key voicing" instead of "B chord at 0:15"
+- Timeline near 0:30 shows "C#" → does NOT fit E minor cleanly → AMBIGUOUS → hedge descriptively, do not name a letter
 
-Example flow for "what chord at 0:09 in E minor":
-1. Check pitch timeline near 0:09 → shows "G"
-2. G in E minor → diatonic G major
-3. Write: "the G chord at 0:09" — grounded in chroma AND key mode
-
-Example of what NOT to do:
-1. Song is in E minor
-2. Write "B chord at 0:09" without checking the pitch timeline
-3. B is in the E minor scale but the chroma at 0:09 doesn't show B — this is a memory-based guess, NOT audio-grounded
+WHAT NOT TO DO:
+- Do NOT name "B chord at 0:00" just because B is in the E minor scale. The timeline must show B AND the key tonic must be reachable for a confident name.
+- Do NOT pick chord letters from your memory of what the song "uses." If the timeline doesn't support it, hedge.
 
 If the song has a capo, reference the SHAPE name with concert pitch in parentheses: "the G shape (Concert C#)" or "your Em shape (Concert Bbm)". A G-shape with capo on fret 6 is a G-shape or Concert C# — NEVER "G#".
 
-EVERY feedback item about guitar playing MUST reference at least one specific chord moment by name. Do not write generic guitar feedback like "the chord shapes could ring out" without naming which chord. But the named chord MUST be grounded in the pitch timeline and the detected key — never picked from memory of what the song "uses."
+EVERY feedback item about guitar playing MUST reference at least one specific chord moment. The reference can be a named chord (when chroma supports it per the guard above) OR a descriptive chord moment (when chroma is ambiguous). What is NOT acceptable is generic guitar feedback with no chord reference at all.
 
 CASE 2: CHORD PROGRESSIONS (MULTIPLE CHORDS IN SEQUENCE)
 Your recall of how songs progress between chords is UNRELIABLE. You routinely fabricate plausible-sounding minor-key or major-key progressions when asked about specific songs. Do NOT assert chord progressions from memory.
