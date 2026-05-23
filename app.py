@@ -912,9 +912,49 @@ def analyze_stem(wav_path, lightweight=False):
             "confidence": round(float(chroma[dominant_idx, i]), 3),
         })
     
+    # ─── Krumhansl-Schmuckler key detection ─────────────────────────
+    # Previously used argmax(chroma_mean) which just picks the most prominent
+    # pitch class. That fails on minor-key songs that heavily play the V chord
+    # — e.g. Bad Things in E minor with heavy B emphasis gets misidentified as
+    # B major because B dominates the chroma. This algorithm correlates the
+    # song's chroma profile against major and minor key templates and picks
+    # whichever profile matches best, which correctly identifies both the
+    # tonic AND the mode (major vs minor).
+    #
+    # Templates from Krumhansl & Kessler (1982), normalized.
     chroma_mean = np.mean(chroma, axis=1)
-    detected_key = pitch_classes[int(np.argmax(chroma_mean))]
-    key_confidence = round(float(np.max(chroma_mean)), 3)
+    
+    # Major and minor key profiles (rotated for each pitch class below)
+    major_profile = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
+    minor_profile = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
+    
+    best_correlation = -np.inf
+    best_key = pitch_classes[0]
+    best_mode = "major"
+    
+    for tonic_idx in range(12):
+        # Rotate templates so tonic_idx is the root
+        major_rotated = np.roll(major_profile, tonic_idx)
+        minor_rotated = np.roll(minor_profile, tonic_idx)
+        
+        # Pearson correlation between chroma and each rotated template
+        major_corr = float(np.corrcoef(chroma_mean, major_rotated)[0, 1])
+        minor_corr = float(np.corrcoef(chroma_mean, minor_rotated)[0, 1])
+        
+        if major_corr > best_correlation:
+            best_correlation = major_corr
+            best_key = pitch_classes[tonic_idx]
+            best_mode = "major"
+        if minor_corr > best_correlation:
+            best_correlation = minor_corr
+            best_key = pitch_classes[tonic_idx]
+            best_mode = "minor"
+    
+    # detected_key now includes mode (e.g. "E minor", "G major") so Claude can
+    # correctly anchor chord references. key_confidence is the correlation
+    # strength — values above ~0.7 are strong matches, below ~0.5 are weak.
+    detected_key = f"{best_key} {best_mode}"
+    key_confidence = round(max(0.0, best_correlation), 3)
     
     onset_frames = librosa.onset.onset_detect(y=y, sr=sr, hop_length=512)
     onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=512)
