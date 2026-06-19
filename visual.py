@@ -18,7 +18,7 @@ import requests as http_requests
 logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
+CLAUDE_MODEL = "claude-sonnet-4-6"
 
 # Sensitivity rules — same as feedback.py
 SENSITIVITY_RULES = """
