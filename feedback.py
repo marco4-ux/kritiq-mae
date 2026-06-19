@@ -16,12 +16,20 @@ Phase 4.5 changes:
   from the metrics provided (onsets, off_pitch_segments, vibrato, pitch_timeline).
 - Original Track Mode disables chord-chart lookups (no published progression
   exists for an original composition).
+
+Post-4.5:
+- Added hard lyric-fabrication enforcement. The prompt forbids ungrounded
+  lyric references but the model occasionally fabricates them anyway. After
+  generation, scrub_fabricated_lyrics() mechanically strips any lyric reference
+  not backed by the Whisper transcript. See lyric_validator.py.
 """
 
 import json
 import logging
 import requests as http_requests
 import os
+
+from lyric_validator import scrub_fabricated_lyrics
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +208,12 @@ def generate_feedback(
 
         # Parse structured JSON from Claude's response
         feedback = _parse_feedback(raw_text)
+
+        # Hard enforcement: strip any lyric reference not backed by the Whisper
+        # transcript. Runs regardless of whether the model obeyed the prompt's
+        # lyric-grounding rules. See lyric_validator.py.
+        feedback = scrub_fabricated_lyrics(feedback, lyrics_transcript)
+
         feedback["raw_response"] = raw_text
         return feedback
 
@@ -230,8 +244,8 @@ A Whisper transcription of the actual audio has been provided in the user prompt
 ABSOLUTE RULES:
 - NEVER quote or paraphrase lyrics from your training data. Your memory of song lyrics is unreliable and produces hallucinations. Many lines you "remember" are wrong.
 - If the Whisper transcript captures a phrase that differs from the official released lyrics, the Whisper transcript is correct for THIS performance. The performer sang what Whisper heard. Comment on that.
-- If you want to reference a specific lyric line, it must appear in the Whisper transcript. Do not insert lines from training-data recall, even if you are confident.
-- If a lyric reference is not directly available in the Whisper transcript, describe the vocal moment in non-lyrical terms (delivery, phrasing, tone, breath) instead.
+- If you want to reference a specific lyric line, it MUST appear VERBATIM in the Whisper transcript. Before writing any lyric in quotes, confirm those exact words are present in the transcript text. Do not insert lines from training-data recall, even if you are confident.
+- If a lyric reference is not directly available in the Whisper transcript, describe the vocal moment in non-lyrical terms (delivery, phrasing, tone, breath) instead. Specificity comes from the timestamp and the musical event, never from inventing the words.
 - If Whisper missed a section (silence in the transcript, garbled output), do NOT fill in the gap from memory. Skip the lyric and comment on the vocal qualities only."""
     else:
         lyrics_rule = """9. LYRICS — DO NOT REFERENCE:
