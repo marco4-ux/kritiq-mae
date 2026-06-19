@@ -114,8 +114,19 @@ def calculate_scores(
     technical_score = _calibrate_to_10(technical_raw)
     emotional_score = _calibrate_to_10(emotional_raw)
 
-    # Overall: weighted blend
-    overall_score = round(technical_score * 0.55 + emotional_score * 0.45, 1)
+    # Overall: weighted blend (raw, Advanced-baseline before tier lift)
+    overall_raw = technical_score * 0.55 + emotional_score * 0.45
+
+    # ── Skill-tier lift ──────────────────────────────────────────────
+    # Same audio rated differently per declared tier. Advanced is the honest
+    # baseline; lower tiers lift; Expert is unforgiving (no lift). Soft caps
+    # compress the top so strong covers don't clip flat to the cap value.
+    overall_score = _apply_tier(overall_raw, skill_level)
+
+    # ── Anti-flat dither ─────────────────────────────────────────────
+    # Andy: avoid suspicious round numbers. Deterministic nudge off .0/.5 so
+    # the same performance always yields the same value but never reads fake.
+    overall_score = _dither(overall_score, technical_raw, emotional_raw)
 
     return {
         "overall": overall_score,
@@ -133,7 +144,8 @@ def calculate_scores(
             "technical_raw": round(technical_raw, 3),
             "emotional_raw": round(emotional_raw, 3),
             "duration_penalty": duration_penalty,
-            "calibration": "descaffold_v1",  # track which curve produced this
+            "overall_raw": round(overall_raw, 3),
+            "calibration": "tier_lift_v1",  # track which logic produced this
             "weights": {
                 "technical": {"pitch": 0.40, "timing": 0.30, "chords": 0.30},
                 "emotional": {"dynamics": 0.45, "tone": 0.30, "timing_feel": 0.25},
@@ -188,7 +200,58 @@ def _calibrate_to_10(raw_score: float) -> float:
     return 9.9
 
 
-# ─── Pitch scoring ───────────────────────────────────────────────────
+# ─── Skill-tier lift + dither ────────────────────────────────────────
+
+# Per-tier lift added to the Advanced-baseline overall score, with optional
+# soft cap. Advanced = honest baseline. Expert = no lift (hardest grader).
+# Caps are soft (asymptotic squeeze near the top) so strong covers keep
+# their spread instead of clipping flat to the cap. These values are Andy's
+# spec and change on request — nothing here is permanent.
+_TIER_RULES = {
+    "Beginner":     {"lift": 2.5, "cap": 9.8},
+    "Intermediate": {"lift": 1.3, "cap": 9.6},
+    "Advanced":     {"lift": 0.4, "cap": None},
+    "Expert":       {"lift": 0.0, "cap": None},
+    "Professional": {"lift": 0.0, "cap": None},  # alias for Expert-grade
+}
+
+
+def _apply_tier(overall_raw: float, skill_level: str) -> float:
+    """Lift the raw overall by the declared tier, with a soft cap."""
+    rule = _TIER_RULES.get(skill_level, _TIER_RULES["Advanced"])
+    lifted = overall_raw + rule["lift"]
+
+    cap = rule["cap"]
+    if cap is not None and lifted > cap - 1.0:
+        # Soft squeeze: compress the last point below the cap so scores
+        # approach (but never reach) the cap, preserving relative spread.
+        over = lifted - (cap - 1.0)
+        lifted = (cap - 1.0) + (1.0 - 1.0 / (1.0 + over)) * 1.0
+
+    return round(min(lifted, 9.9), 1)
+
+
+def _dither(score: float, technical_raw: float, emotional_raw: float) -> float:
+    """
+    Push the score off flat .0/.5 endings so it reads realistic. Deterministic:
+    derived from the raw inputs, so identical performances always score the same.
+    """
+    cents = round(score * 10) % 10
+    if cents not in (0, 5):
+        return score  # already has a non-round tenth
+
+    # Deterministic offset from the raw signals' lower decimals.
+    seed = (technical_raw * 1000 + emotional_raw * 1000)
+    frac = int(seed) % 7  # 0..6
+    delta = (frac - 3) / 10.0  # -0.3..+0.3
+    if delta == 0:
+        delta = 0.1
+    nudged = score + delta
+    # Keep it sane: stay within [1.0, 9.9] and don't land back on .0/.5.
+    nudged = max(1.0, min(9.9, round(nudged, 1)))
+    if round(nudged * 10) % 10 in (0, 5):
+        nudged = round(nudged + 0.1, 1)
+    return min(nudged, 9.9)
 
 def _pitch_accuracy_strict(user: dict, ref: dict) -> float:
     """
