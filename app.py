@@ -7,6 +7,7 @@ import time
 import requests as http_requests
 import logging
 import gc
+import hashlib
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,18 +26,12 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 import jwt as pyjwt
 
 # ─── Phase 4.5: Song Critique Mode mapping ───────────────────────────
-# Maps the new form field to:
-#   - critique_mode: the canonical mode name passed to feedback.py
-#   - reference_weighting: scoring mode, derived from critique mode (no longer
-#     a separate user-facing choice)
 SONG_CRITIQUE_MODE_MAP = {
     "Cover Band Mode":     {"reference_weighting": "Strict",   "scoring_mode": "strict"},
     "New Cover Mode":      {"reference_weighting": "Creative", "scoring_mode": "creative"},
     "Original Track Mode": {"reference_weighting": "None",     "scoring_mode": "creative"},
 }
 
-# Legacy `style` values from Phase 4 and earlier — mapped to new modes for
-# backward compatibility while the frontend transitions.
 LEGACY_STYLE_TO_CRITIQUE_MODE = {
     "Original Style": "Cover Band Mode",
     "Interpretation": "New Cover Mode",
@@ -50,17 +45,13 @@ def resolve_song_critique_mode(form) -> str:
     """
     Read the song critique mode from the request form, with backward-compat
     fallback to the legacy `style` field.
-
-    Returns one of: "Cover Band Mode", "New Cover Mode", "Original Track Mode".
     """
     new_value = form.get("song_critique_mode", "").strip()
     if new_value in SONG_CRITIQUE_MODE_MAP:
         return new_value
 
-    # Backward compatibility: accept legacy `style` field
     legacy_style = form.get("style", "").strip()
     if legacy_style in SONG_CRITIQUE_MODE_MAP:
-        # Legacy field is already using a new value — accept it
         return legacy_style
     if legacy_style in LEGACY_STYLE_TO_CRITIQUE_MODE:
         mapped = LEGACY_STYLE_TO_CRITIQUE_MODE[legacy_style]
@@ -375,6 +366,76 @@ def upsert_song(song_title: str, song_artist: str) -> str:
         return None
 
 
+# ─── Phase 5: Gate 1 helpers (hashing + duplicate detection) ─────────
+
+def compute_file_hash(file_path: str) -> str:
+    """SHA-256 of the uploaded file, streamed (files can be ~100MB)."""
+    h = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def check_duplicate_submission(file_hash: str, skill_level: str, user_id: str) -> bool:
+    """
+    Gate 1 (anti-clone): a submission is a duplicate only if BOTH the file
+    hash AND the declared skill level match an existing submission.
+    Same hash at a DIFFERENT skill level is allowed by spec.
+
+    Phase 5 behavior: duplicates still receive full feedback — they are only
+    marked leaderboard-ineligible (leaderboards ship in 5.5).
+    """
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not file_hash:
+        return False
+    try:
+        resp = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/submissions",
+            headers=_supabase_headers(),
+            params={
+                "file_hash": f"eq.{file_hash}",
+                "skill_level": f"eq.{skill_level}",
+                "select": "id",
+                "limit": "1",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return len(resp.json()) > 0
+    except Exception as e:
+        logger.warning(f"Gate 1 duplicate check failed (allowing submission): {e}")
+        return False  # fail open — never block feedback on an infra error
+
+
+def log_rejection(account_id, reason, song_title, song_artist, file_hash,
+                  skill_level, submission_id=None) -> None:
+    """Write a permanent Gate 1 rejection record. Never raises."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return
+    try:
+        payload = {
+            "account_id": account_id,
+            "reason": reason,
+            "song_title": song_title,
+            "song_artist": song_artist,
+            "file_hash": file_hash,
+            "skill_level": skill_level,
+            "submission_id": submission_id,
+        }
+        resp = http_requests.post(
+            f"{SUPABASE_URL}/rest/v1/rejection_logs",
+            headers=_supabase_headers(),
+            json=payload,
+            timeout=10,
+        )
+        if resp.status_code >= 400:
+            logger.warning(f"Rejection log write HTTP {resp.status_code}: {resp.text[:300]}")
+        else:
+            logger.info(f"Gate 1 rejection logged: {reason} for hash {file_hash[:12]}...")
+    except Exception as e:
+        logger.warning(f"Rejection log write failed: {e}")
+
+
 def save_submission(data: dict) -> str:
     """Save a submission record to Supabase. Returns an ID or None.
     
@@ -410,6 +471,7 @@ def save_submission(data: dict) -> str:
             "overall_score": data.get("scores", {}).get("overall") if data.get("scores") else None,
             "processed": True,
             "submitter_name": submitter_name,
+            "file_hash": data.get("file_hash"),  # Phase 5
         }
         resp = http_requests.post(
             f"{SUPABASE_URL}/rest/v1/performances",
@@ -456,6 +518,10 @@ def save_submission(data: dict) -> str:
                 "pipeline_timing": data.get("pipeline_timing"),
                 "status": data.get("status", "completed"),
                 "completed_at": data.get("completed_at"),
+                # Phase 5 columns
+                "file_hash": data.get("file_hash"),
+                "leaderboard_eligible": data.get("leaderboard_eligible", True),
+                "visual_kind": data.get("visual_kind"),
             }
             resp = http_requests.post(
                 f"{SUPABASE_URL}/rest/v1/submissions",
@@ -913,18 +979,8 @@ def analyze_stem(wav_path, lightweight=False):
         })
     
     # ─── Krumhansl-Schmuckler key detection ─────────────────────────
-    # Previously used argmax(chroma_mean) which just picks the most prominent
-    # pitch class. That fails on minor-key songs that heavily play the V chord
-    # — e.g. Bad Things in E minor with heavy B emphasis gets misidentified as
-    # B major because B dominates the chroma. This algorithm correlates the
-    # song's chroma profile against major and minor key templates and picks
-    # whichever profile matches best, which correctly identifies both the
-    # tonic AND the mode (major vs minor).
-    #
-    # Templates from Krumhansl & Kessler (1982), normalized.
     chroma_mean = np.mean(chroma, axis=1)
     
-    # Major and minor key profiles (rotated for each pitch class below)
     major_profile = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
     minor_profile = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
     
@@ -933,11 +989,9 @@ def analyze_stem(wav_path, lightweight=False):
     best_mode = "major"
     
     for tonic_idx in range(12):
-        # Rotate templates so tonic_idx is the root
         major_rotated = np.roll(major_profile, tonic_idx)
         minor_rotated = np.roll(minor_profile, tonic_idx)
         
-        # Pearson correlation between chroma and each rotated template
         major_corr = float(np.corrcoef(chroma_mean, major_rotated)[0, 1])
         minor_corr = float(np.corrcoef(chroma_mean, minor_rotated)[0, 1])
         
@@ -950,9 +1004,6 @@ def analyze_stem(wav_path, lightweight=False):
             best_key = pitch_classes[tonic_idx]
             best_mode = "minor"
     
-    # detected_key now includes mode (e.g. "E minor", "G major") so Claude can
-    # correctly anchor chord references. key_confidence is the correlation
-    # strength — values above ~0.7 are strong matches, below ~0.5 are weak.
     detected_key = f"{best_key} {best_mode}"
     key_confidence = round(max(0.0, best_correlation), 3)
     
@@ -1361,17 +1412,19 @@ def search_songs():
 @app.route("/analyze", methods=["POST", "OPTIONS"])
 def analyze():
     """
-    Phase 4.5 MAE pipeline:
-    1. Resolve song_critique_mode (with backward-compat fallback to legacy `style`)
+    Phase 5 MAE pipeline:
+    1. Resolve song_critique_mode (backward-compat fallback to legacy `style`)
     2. Derive scoring mode from critique mode
-    3. Upload media → FFmpeg extracts audio (works for video or audio-only)
-    4. Solo-performance Librosa analysis (Demucs path retained but inactive)
-    5. Reference comparison (Cover Band / New Cover only — skipped for Original Track)
-    6. Scoring + Whisper (vocals only) + Visual analysis (skipped for audio-only)
-    7. Claude feedback (single unified persona, scaled by skill_level)
-    8. Save submission
+    3. Hash upload + Gate 1 duplicate detection (Phase 5)
+    4. FFmpeg audio extraction → Librosa analysis
+    5. Reference comparison (Cover Band / New Cover only)
+    6. Scoring + Whisper (vocals only)
+    7. Visual analysis: presence (vocals) or technique (instrument-only) —
+       skipped entirely for audio-only submissions (Phase 5 toggle)
+    8. Claude feedback
+    9. Save submission (with file_hash / leaderboard_eligible / visual_kind)
 
-    Auth behavior unchanged from Phase 4:
+    Auth behavior:
     - No Authorization header: anonymous, writes to `performances` only
     - Valid JWT: authenticated, writes to both `performances` and `submissions`
     - Invalid JWT: 401 (no silent fallback to anonymous)
@@ -1391,8 +1444,8 @@ def analyze():
     # ─── Phase 4.5: resolve mode + audio-only flag up front ─────────
     song_critique_mode = resolve_song_critique_mode(request.form)
     mode_config = SONG_CRITIQUE_MODE_MAP[song_critique_mode]
-    ref_mode = mode_config["scoring_mode"]            # "strict" or "creative" — passed to scoring.py
-    reference_weighting_db = mode_config["reference_weighting"]  # "Strict", "Creative", or "None" — written to DB
+    ref_mode = mode_config["scoring_mode"]
+    reference_weighting_db = mode_config["reference_weighting"]
 
     audio_only = parse_audio_only_flag(request.form)
 
@@ -1407,6 +1460,28 @@ def analyze():
         input_path = tmp.name
     
     temp_files = [input_path]
+
+    # ─── Phase 5 Gate 1: hash + duplicate detection ──────────────────
+    # Hash every upload. Duplicate = same hash AND same declared skill level.
+    # Duplicates still get full feedback; they're only leaderboard-ineligible.
+    file_hash = None
+    is_duplicate = False
+    try:
+        file_hash = compute_file_hash(input_path)
+        skill_level_early = request.form.get("skill_level", "Intermediate")
+        is_duplicate = check_duplicate_submission(file_hash, skill_level_early, user_id)
+        if is_duplicate:
+            logger.info(f"Gate 1: duplicate detected (hash={file_hash[:12]}..., skill={skill_level_early})")
+            log_rejection(
+                account_id=user_id,
+                reason="duplicate_hash_and_skill",
+                song_title=request.form.get("song_title", ""),
+                song_artist=request.form.get("song_artist", ""),
+                file_hash=file_hash,
+                skill_level=skill_level_early,
+            )
+    except Exception as e:
+        logger.warning(f"Gate 1 hashing failed (continuing without): {e}")
     
     try:
         t0 = time.time()
@@ -1474,9 +1549,6 @@ def analyze():
         t3 = time.time()
         
         # ─── Step 6: Reference comparison ───────────────────────────
-        # Cover Band Mode + New Cover Mode pull a reference for context.
-        # Original Track Mode SKIPS reference fetching entirely — there is
-        # no published reference recording for an original composition.
         logger.info(f"Step 6: Resolving reference (critique_mode={song_critique_mode})...")
         from scoring import calculate_scores
         
@@ -1487,13 +1559,6 @@ def analyze():
         reference_track = None
 
         if song_critique_mode == "Original Track Mode":
-            # Phase 4.5 follow-up: Original Track Mode now accepts a user-
-            # uploaded reference (e.g. their own studio version or demo).
-            # The reference is for Claude's context only — scoring stays
-            # purely creative because there's no published original to compare
-            # against, and judging an original composition against the user's
-            # own demo would create incoherent scoring semantics. The reference
-            # just gives Claude richer audio context for feedback generation.
             if "reference_file" in request.files:
                 logger.info("Original Track Mode — using user-uploaded reference for context only")
                 ref_file = request.files["reference_file"]
@@ -1513,7 +1578,6 @@ def analyze():
             else:
                 logger.info("Original Track Mode — no reference uploaded, scoring purely on internal consistency")
         elif ref_mode == "strict" and song_title:
-            # Cover Band Mode — pull reference for strict comparison
             if "reference_file" in request.files:
                 logger.info("Using user-uploaded reference track...")
                 ref_file = request.files["reference_file"]
@@ -1546,7 +1610,6 @@ def analyze():
                         logger.info("No Deezer reference found, falling back to creative mode")
                         ref_mode = "creative"
         elif ref_mode == "creative" and song_title:
-            # New Cover Mode — pull reference for context only (scoring stays creative)
             cached = get_cached_reference(song_title, song_artist)
             if cached:
                 reference_analysis = cached
@@ -1563,23 +1626,25 @@ def analyze():
         scores = calculate_scores(metrics, reference_analysis=reference_analysis, mode=ref_mode, skill_level=skill_level)
         t4 = time.time()
         
-        # ─── Step 7: Visual analysis ────────────────────────────────
+        # ─── Step 7: Visual analysis (Phase 5 toggle) ───────────────
         # Skipped entirely for audio-only submissions.
+        # Vocals selected → presence analysis (original behavior).
+        # No vocals selected → technique-only analysis.
         visual_analysis = None
         instrument = request.form.get("instrument", "")
+        visual_kind = None
 
         if audio_only:
             logger.info("Step 7: Audio-only submission — skipping visual analysis")
             t_visual = t4
         else:
             from visual import analyze_video
-            logger.info("Step 7: Running visual analysis on video frames...")
-            visual_analysis = analyze_video(input_path, instrument=instrument)
+            visual_kind = "presence" if "vocal" in instrument.lower() else "technique"
+            logger.info(f"Step 7: Running visual analysis (mode={visual_kind})...")
+            visual_analysis = analyze_video(input_path, instrument=instrument, mode=visual_kind)
             t_visual = time.time()
 
-        # ─── Step 7b: Whisper transcription (vocals only, audio path) ───
-        # Whisper runs on the analysis_wav regardless of whether the source
-        # was video or audio — same audio data either way.
+        # ─── Step 7b: Whisper transcription (vocals only) ───────────
         lyrics_transcript = None
         if OPENAI_API_KEY and "vocal" in instrument.lower():
             try:
@@ -1596,7 +1661,7 @@ def analyze():
             except Exception as e:
                 logger.warning(f"Whisper transcription failed: {e}")
         
-        # ─── Step 8: Claude feedback (Phase 4.5: unified persona) ───
+        # ─── Step 8: Claude feedback ─────────────────────────────────
         feedback = None
         from feedback import generate_feedback, ANTHROPIC_API_KEY as _ak
         if _ak:
@@ -1605,9 +1670,6 @@ def analyze():
                 "title": song_title or "Unknown",
                 "artist": song_artist or "Unknown",
             }
-            # Phase 4.5 artist_context — `harshness` removed, `style` removed,
-            # `intentional_choices` renamed to `creative_choices`,
-            # `influence` removed (UI dropped).
             creative_choices = (
                 request.form.get("creative_choices")
                 or request.form.get("intentional_choices", "")  # legacy fallback
@@ -1663,6 +1725,10 @@ def analyze():
                 },
                 "status": "completed",
                 "completed_at": datetime.now(timezone.utc).isoformat(),
+                # Phase 5 fields
+                "file_hash": file_hash,
+                "leaderboard_eligible": not is_duplicate,
+                "visual_kind": visual_kind,
             }
             submission_id = save_submission(submission_data)
         except Exception as e:
@@ -1673,6 +1739,7 @@ def analyze():
             "submission_id": submission_id,
             "song_critique_mode": song_critique_mode,
             "audio_only": audio_only,
+            "leaderboard_eligible": not is_duplicate,
             "pipeline_timing": {
                 "ffmpeg_seconds": round(t1 - t0, 2),
                 "demucs_seconds": round(t2 - t1, 2),
