@@ -254,11 +254,12 @@ def scrub_fabricated_lyrics(feedback: dict, lyrics_transcript: str = None) -> di
             total_removed += n
 
     if total_removed:
-        logger.info(
-            f"lyric_validator: stripped {total_removed} unverified lyric "
-            f"reference(s) (transcript_present={has_transcript})"
-        )
         feedback["_lyric_scrub_count"] = total_removed
+
+    logger.info(
+        f"lyric_validator: scrub ran (transcript_present={has_transcript}, "
+        f"stripped={total_removed})"
+    )
 
     return feedback
 
