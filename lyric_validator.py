@@ -53,6 +53,19 @@ _CAP_RUN_PATTERN = re.compile(
     r"\b(?:[A-Z][a-z']+(?:\s+|$)){3,}"
 )
 
+# A quoted span is only treated as a LYRIC CLAIM when the model introduces it
+# as one — a lyric-referent word within this many chars BEFORE the quote.
+# Empirical basis: the real production fabrication read "On lines like
+# 'you're getting it' near the end of the transcription" (referent directly
+# precedes the quote), while the observed false positives ("transform the
+# feeling from 'performer practicing alone'") had no referent context at all.
+_REFERENT_WINDOW = 30
+_LYRIC_REFERENT_PATTERN = re.compile(
+    r"\b(?:line|lines|lyric|lyrics|phrase|phrases|words?|verse|chorus|"
+    r"sing|sings|sang|sung|singing|transcri\w*)\b",
+    re.IGNORECASE,
+)
+
 # Quote characters by family. We find an opening quote, then the matching
 # closing quote of the same family, allowing apostrophes inside straight-single
 # spans ("You're getting it"). Regex alone mishandles the apostrophe ambiguity,
@@ -117,7 +130,14 @@ def _find_quoted_spans(text: str):
 
 
 def _strip_quoted(text: str, norm_transcript: str, has_transcript: bool):
-    """Replace unverified multi-word quoted lyric spans with a generic referent."""
+    """Replace unverified multi-word quoted LYRIC spans with a generic referent.
+
+    A quoted span is only a lyric claim if a lyric-referent word (line, lyric,
+    phrase, sing, transcription, ...) appears shortly before the quote. Quoted
+    descriptions with no such context ("transform the feeling from 'performer
+    practicing alone'") are left alone — stripping those degraded real
+    production feedback (false positives observed 2026-07-14).
+    """
     spans = _find_quoted_spans(text)
     if not spans:
         return text, 0
@@ -128,7 +148,9 @@ def _strip_quoted(text: str, norm_transcript: str, has_transcript: bool):
     for start, end, inner in spans:
         if start < idx:
             continue  # overlapping; already consumed
-        if len(_normalize(inner).split()) >= 2 and (
+        context_before = text[max(0, start - _REFERENT_WINDOW):start]
+        is_lyric_claim = bool(_LYRIC_REFERENT_PATTERN.search(context_before))
+        if is_lyric_claim and len(_normalize(inner).split()) >= 2 and (
             not has_transcript or not _in_transcript(inner, norm_transcript)
         ):
             out.append(text[idx:start])
@@ -195,16 +217,11 @@ def _scrub_text(text: str, norm_transcript: str, has_transcript: bool) -> tuple:
     out.append(text[idx:])
     text = "".join(out)
 
-    # ── 3. Bare capitalized runs (no lead-in, no quotes) ─────────────
-    def _cap_repl(m):
-        nonlocal removed
-        fragment = m.group(0).strip()
-        if not has_transcript or not _in_transcript(fragment, norm_transcript):
-            removed += 1
-            return ""  # excise; surrounding sentence usually survives
-        return m.group(0)
-
-    text = _CAP_RUN_PATTERN.sub(_cap_repl, text)
+    # ── 3. Bare capitalized runs: REMOVED 2026-07-14 ─────────────────
+    # This rule never caught a real fabrication in production (the observed
+    # fabrication was quoted) and its only production hits were false
+    # positives on prose like "The Pitch Timeline". Fabricated lyrics arrive
+    # quoted or with a lyric lead-in — rules 1 and 2 cover both.
 
     # Tidy double spaces / orphaned punctuation left by excisions.
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
