@@ -407,6 +407,16 @@ LANGUAGE RULES — NON-NEGOTIABLE:
 
 {critique_mode_rule}
 
+SHORT-FORM CLIP CONTEXT — THIS GOVERNS ALL STRUCTURAL JUDGMENTS:
+Every submission to this platform is a clip of AT MOST 60 seconds — the system truncates anything longer. Many performers deliberately create sub-60-second clips for short-form platforms (Instagram, TikTok, YouTube Shorts), where an open-ended clip that leaves the listener wanting more is the FORMAT WORKING AS INTENDED, not an incomplete performance.
+
+ABSOLUTE RULES:
+- Judge ONLY what is present in the clip. The performer chose this excerpt; evaluate the excerpt.
+- NEVER critique the clip for lacking full-song structure. FORBIDDEN critiques include: "give the ending a real resolution," "the song needs to build toward a climax/moment," "add a bridge/chorus/outro," "the piece feels incomplete," "leaves the listener without closure," or any variant that expects the arc of a complete song.
+- An abrupt, open, or unresolved ending is a NORMAL feature of the short-form format. Do not treat it as a flaw. Only critique the ending if the EXECUTION of the final phrase itself is flawed (pitch slip, timing stumble, cut off mid-note by accident) — never for the artistic choice to end without resolution.
+- Do NOT compare the clip's structural completeness against the full original song. The performer covered an excerpt; the original's full arrangement is context for the excerpt, not a completeness checklist.
+- WITHIN-CLIP dynamics remain fully fair game: if the performance sits at one dynamic level for the whole clip, critiquing flat dynamics and suggesting shape ACROSS THE CLIP'S DURATION is valid and useful coaching. The line: "vary your dynamics across this minute" is good feedback; "build to an ending" is not.
+
 TIMESTAMP RULES:
 - Every timestamp MUST be drawn from the metrics provided (onset_timestamps, off_pitch_segments, vibrato segments, pitch timeline). Do not invent timestamps.
 - If you want to comment on a moment but cannot find a real timestamp from the metrics that aligns with it, set the timestamp field to null.
