@@ -1982,9 +1982,41 @@ def analyze():
             t_visual = t4
         else:
             from visual import analyze_video
-            visual_kind = "presence" if "vocal" in instrument.lower() else "technique"
-            logger.info(f"Step 7: Running visual analysis (mode={visual_kind})...")
-            visual_analysis = analyze_video(input_path, instrument=instrument, mode=visual_kind)
+            _sings = "vocal" in instrument.lower()
+            _plays = any(
+                _i in instrument.lower()
+                for _i in ("guitar", "piano", "keyboard", "bass", "ukulele", "banjo",
+                           "mandolin", "violin", "cello", "harmonica", "saxophone",
+                           "trumpet", "brass", "drum", "percussion")
+            )
+
+            if _sings and _plays:
+                # Phase 5.5 item 5: sing-and-play gets BOTH cards. Two separate
+                # Vision calls rather than one combined prompt -- the technique
+                # card's value is its specificity, and sharing a token budget
+                # would dilute both. Costs ~12s and one extra API call.
+                visual_kind = "both"
+                logger.info("Step 7: Running DUAL visual analysis (presence + technique)...")
+                visual_analysis = analyze_video(input_path, instrument=instrument, mode="presence")
+                _technique = analyze_video(input_path, instrument=instrument, mode="technique")
+                if visual_analysis and _technique:
+                    # Nested rather than a new column: the 193 existing rows
+                    # simply lack this key and render exactly as before.
+                    visual_analysis["secondary_analysis"] = _technique
+                    logger.info("Step 7: Dual visual complete (both cards attached)")
+                elif _technique and not visual_analysis:
+                    # Presence failed, technique succeeded -- ship what we have.
+                    visual_analysis = _technique
+                    visual_kind = "technique"
+                    logger.warning("Step 7: Presence analysis failed, falling back to technique only")
+                elif visual_analysis:
+                    visual_kind = "presence"
+                    logger.warning("Step 7: Technique analysis failed, presence only")
+            else:
+                visual_kind = "presence" if _sings else "technique"
+                logger.info(f"Step 7: Running visual analysis (mode={visual_kind})...")
+                visual_analysis = analyze_video(input_path, instrument=instrument, mode=visual_kind)
+
             t_visual = time.time()
 
         # ─── Step 7b: Whisper transcription (vocals only) ───────────
