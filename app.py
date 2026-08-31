@@ -1498,6 +1498,212 @@ def search_songs():
         logger.warning(f"Song search failed: {e}")
         return jsonify({"results": []})
 
+# ─── Phase 5.5: leaderboards + public profile cards ──────────────────
+# Boards are COMPUTED, never stored: each request sorts live and takes the
+# top 100. Displacement, capping and silent bumping fall out of the query
+# for free -- there is no ranking table to maintain and no bump event.
+#
+# These go through the backend rather than direct Supabase reads because
+# `profiles` RLS is view-own-only: a browser can never read another user's
+# display name. The service key can, and this endpoint returns ONLY public
+# fields -- never email, never user_id.
+
+LEADERBOARD_LIMIT = 100
+
+
+def _fetch_display_names(user_ids: list) -> dict:
+    """Map user_id -> display_name for a batch of ids. Missing names are
+    omitted; the caller decides the fallback."""
+    if not user_ids:
+        return {}
+    try:
+        resp = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/profiles",
+            headers=_supabase_headers(),
+            params={
+                "id": f"in.({','.join(user_ids)})",
+                "select": "id,display_name",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return {
+            r["id"]: r.get("display_name")
+            for r in resp.json() or []
+            if r.get("display_name")
+        }
+    except Exception as e:
+        logger.warning(f"Display-name lookup failed: {e}")
+        return {}
+
+
+@app.route("/leaderboard", methods=["GET", "OPTIONS"])
+def leaderboard():
+    """
+    Top 100 for one silo. Query params:
+      song_id      (required) uuid
+      mode         (required) "Cover Band Mode" | "New Cover Mode"
+      skill_level  (required) "Beginner" | "Intermediate" | "Advanced"
+
+    Original Track submissions compete in New Cover Mode, per spec.
+    """
+    if request.method == "OPTIONS":
+        return '', 200
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return jsonify({"error": "Server not configured"}), 500
+
+    song_id = request.args.get("song_id", "").strip()
+    mode = request.args.get("mode", "").strip()
+    skill_level = request.args.get("skill_level", "").strip()
+    if not song_id or not mode or not skill_level:
+        return jsonify({"error": "song_id, mode and skill_level are required"}), 400
+
+    # Original Track competes in the New Cover division.
+    mode_filter = ["New Cover Mode", "Original Track Mode"] if mode == "New Cover Mode" else [mode]
+    style_param = (
+        f"in.({','.join(chr(34) + m + chr(34) for m in mode_filter)})"
+        if len(mode_filter) > 1 else f"eq.{mode_filter[0]}"
+    )
+
+    try:
+        resp = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/submissions",
+            headers=_supabase_headers(),
+            params={
+                "song_id": f"eq.{song_id}",
+                "style": style_param,
+                "skill_level": f"eq.{skill_level}",
+                "leaderboard_eligible": "eq.true",
+                "status": "eq.completed",
+                "select": "id,user_id,scores,instrument,style,created_at",
+                "order": "scores->>overall.desc.nullslast",
+                "limit": str(LEADERBOARD_LIMIT),
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        rows = resp.json() or []
+    except Exception as e:
+        logger.warning(f"Leaderboard query failed: {e}")
+        return jsonify({"error": "Could not load leaderboard"}), 502
+
+    names = _fetch_display_names(list({r["user_id"] for r in rows if r.get("user_id")}))
+
+    entries = []
+    for i, r in enumerate(rows, start=1):
+        scores = r.get("scores") or {}
+        if isinstance(scores, str):
+            try:
+                scores = json.loads(scores)
+            except Exception:
+                scores = {}
+        overall = scores.get("overall")
+        if overall is None:
+            continue  # unscored rows never rank
+        entries.append({
+            "rank": i,
+            "user_id": r.get("user_id"),   # for the profile-card tap only
+            "username": names.get(r.get("user_id")) or "Anonymous",
+            "score": overall,
+            "instrument": r.get("instrument"),  # NULL on pre-5.5 rows
+            "mode": r.get("style"),
+            "date": (r.get("created_at") or "")[:10],
+        })
+
+    logger.info(
+        f"Leaderboard: song={song_id[:8]} mode={mode} tier={skill_level} "
+        f"-> {len(entries)} entries"
+    )
+    return jsonify({
+        "song_id": song_id,
+        "mode": mode,
+        "skill_level": skill_level,
+        "count": len(entries),
+        "entries": entries,
+    })
+
+
+@app.route("/leaderboard/songs", methods=["GET", "OPTIONS"])
+def leaderboard_songs():
+    """Songs that have at least one eligible entry, so the frontend can
+    populate its picker instead of hardcoding a list."""
+    if request.method == "OPTIONS":
+        return '', 200
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return jsonify({"error": "Server not configured"}), 500
+    try:
+        resp = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/submissions",
+            headers=_supabase_headers(),
+            params={
+                "leaderboard_eligible": "eq.true",
+                "status": "eq.completed",
+                "select": "song_id,songs(title,artist)",
+                "limit": "1000",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        seen, songs = set(), []
+        for r in resp.json() or []:
+            sid = r.get("song_id")
+            song = r.get("songs") or {}
+            if not sid or sid in seen or not song.get("title"):
+                continue
+            seen.add(sid)
+            songs.append({
+                "song_id": sid,
+                "title": song.get("title"),
+                "artist": song.get("artist"),
+            })
+        songs.sort(key=lambda s: (s["title"] or "").lower())
+        return jsonify({"songs": songs})
+    except Exception as e:
+        logger.warning(f"Leaderboard song list failed: {e}")
+        return jsonify({"songs": []})
+
+
+@app.route("/profile/<user_id>", methods=["GET", "OPTIONS"])
+def public_profile(user_id):
+    """Public profile card opened by tapping a leaderboard username.
+    Returns display name and outside-music links ONLY -- never email."""
+    if request.method == "OPTIONS":
+        return '', 200
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return jsonify({"error": "Server not configured"}), 500
+    try:
+        resp = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/profiles",
+            headers=_supabase_headers(),
+            params={
+                "id": f"eq.{user_id}",
+                "select": "display_name,skill_level,spotify_url,youtube_url,"
+                          "instagram_url,tiktok_url,website_url",
+                "limit": "1",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json() or []
+        if not rows:
+            return jsonify({"error": "Profile not found"}), 404
+        p = rows[0]
+        return jsonify({
+            "username": p.get("display_name") or "Anonymous",
+            "skill_level": p.get("skill_level"),
+            "links": {
+                "spotify": p.get("spotify_url"),
+                "youtube": p.get("youtube_url"),
+                "instagram": p.get("instagram_url"),
+                "tiktok": p.get("tiktok_url"),
+                "website": p.get("website_url"),
+            },
+        })
+    except Exception as e:
+        logger.warning(f"Public profile lookup failed: {e}")
+        return jsonify({"error": "Could not load profile"}), 502
+
+
 @app.route("/analyze", methods=["POST", "OPTIONS"])
 def analyze():
     """
