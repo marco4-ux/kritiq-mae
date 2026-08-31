@@ -717,19 +717,35 @@ RULES:
         onset_mmss = [_seconds_to_mmss(t) for t in sampled_onsets]
         prompt += f"\n- Onset Timestamps (sampled — USE THESE AS YOUR TIMESTAMP ANCHORS): {onset_mmss}"
 
-    # Progress context
+        # Progress context (Phase 5.5 callbacks)
     if progress_context and progress_context.get("previous_submissions", 0) > 0:
         prev = progress_context.get("previous_feedback", {})
         prompt += f"""
-
 ## PROGRESS CONTEXT
 This user has submitted this song {progress_context['previous_submissions']} time(s) before.
-Previous scores: {json.dumps(progress_context.get('previous_scores', {}), indent=2)}
+Submission history, most recent first:
+{json.dumps(progress_context.get('previous_scores', {}), indent=2)}
 Previous feedback summary: {json.dumps(prev, indent=2) if prev else 'None available'}
+This submission's skill level: {progress_context.get('current_skill_level', 'unknown')}
 
-IMPORTANT: Reference their previous submission specifically. In "what_worked", mention 
-improvements since last time. In "needs_improvement", pick up where the last feedback 
-left off rather than starting from scratch."""
+CALLBACK RULES:
+- Reference their history specifically. In "what_worked", name what improved since last
+  time. In "needs_improvement", pick up where previous feedback left off rather than
+  starting over.
+- Cite movement in the SUB-METRICS (pitch, timing, chords, dynamics, tone). Those are raw
+  measurements and ARE comparable across every submission.
+- NEVER compare "overall", "technical", or "emotional" across submissions at DIFFERENT
+  skill levels. Those are calibrated per tier, so changing tier moves the number for
+  reasons unrelated to the playing. Compare them only when the skill level is identical.
+- Only claim improvement or decline you can point to in the numbers. If nothing moved
+  meaningfully, say it held steady. Do not invent progress."""
+    else:
+        prompt += """
+## PROGRESS CONTEXT
+This is the performer's FIRST submission of this song (or their first while signed in).
+- Do NOT reference past attempts, previous scores, or prior feedback. There are none.
+- Frame this as their baseline for this song, the reference point future submissions get
+  measured against. One brief natural mention is enough; do not belabor it."""
 
     # Visual analysis (only present for video submissions)
     if visual_analysis:

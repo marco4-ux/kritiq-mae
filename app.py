@@ -407,6 +407,37 @@ def check_duplicate_submission(file_hash: str, skill_level: str, user_id: str) -
         return False  # fail open — never block feedback on an infra error
 
 
+def get_prior_submissions(user_id: str, song_id: str, limit: int = 3) -> list:
+    """
+    Phase 5.5 (feedback callbacks): this user's previous submissions of the
+    SAME song, most recent first, so feedback can reference real movement
+    instead of starting from scratch every time.
+
+    Returns [] for anonymous users, unknown songs, or any infra error --
+    callbacks are an enhancement, never a reason to fail a submission.
+    """
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not user_id or not song_id:
+        return []
+    try:
+        resp = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/submissions",
+            headers=_supabase_headers(),
+            params={
+                "user_id": f"eq.{user_id}",
+                "song_id": f"eq.{song_id}",
+                "select": "scores,skill_level,created_at",
+                "order": "created_at.desc",
+                "limit": str(limit),
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json() or []
+    except Exception as e:
+        logger.warning(f"Prior-submission lookup failed (continuing without callbacks): {e}")
+        return []
+
+
 def log_rejection(account_id, reason, song_title, song_artist, file_hash,
                   skill_level, submission_id=None) -> None:
     """Write a permanent Gate 1 rejection record. Never raises."""
@@ -1707,12 +1738,44 @@ def analyze():
                 "environment": request.form.get("environment", "Bedroom Tape"),
                 "creative_choices": creative_choices,
             }
+            # --- Phase 5.5: feedback callbacks --------------------------
+            # song_id is otherwise resolved at Step 9; upsert_song is
+            # idempotent (lookup-then-insert), so calling it here is safe.
+            progress_context = None
+            _cb_song_id = upsert_song(song_title, song_artist) if user_id else None
+            _prior = get_prior_submissions(user_id, _cb_song_id) if _cb_song_id else []
+            logger.info(f"Callbacks: {len(_prior)} prior submission(s) for this user+song")
+            if _prior:
+                _keys = ("overall", "technical", "emotional", "pitch_accuracy",
+                         "timing_consistency", "chord_accuracy", "dynamic_control",
+                         "tonal_clarity")
+                _history = []
+                for _row in _prior:
+                    _s = _row.get("scores") or {}
+                    if isinstance(_s, str):
+                        try:
+                            _s = json.loads(_s)
+                        except Exception:
+                            _s = {}
+                    _entry = {
+                        "date": (_row.get("created_at") or "")[:10],
+                        "skill_level": _row.get("skill_level"),
+                    }
+                    _entry.update({_k: _s.get(_k) for _k in _keys if _s.get(_k) is not None})
+                    _history.append(_entry)
+                progress_context = {
+                    "previous_submissions": len(_history),
+                    "previous_scores": _history,
+                    "current_skill_level": skill_level,
+                }
+
             feedback = generate_feedback(
                 scores=scores,
                 analysis=metrics,
                 song_context=song_context,
                 artist_context=artist_context,
                 song_critique_mode=song_critique_mode,
+                progress_context=progress_context,
                 visual_analysis=visual_analysis,
                 lyrics_transcript=lyrics_transcript,
             )
