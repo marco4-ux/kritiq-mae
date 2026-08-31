@@ -1547,6 +1547,31 @@ def analyze():
         metrics = analyze_stem(analysis_wav)
         gc.collect()
         t3 = time.time()
+
+        # Input sanity gate (Phase 5.5): reject unusable audio BEFORE the paid
+        # calls (visual, Whisper, Claude). Deliberately narrow — this catches
+        # silence, dead mics and corrupt/truncated files only. It is NOT a
+        # quality gate; bedroom recordings must pass. Reference: a real bedroom
+        # guitar+vocal take measured avg_rms 0.0159, ~16x above this floor.
+        # Fails open: if a metric is missing, the pipeline continues.
+        _rms = metrics.get("avg_rms")
+        _dur = metrics.get("duration_seconds")
+
+        if isinstance(_dur, (int, float)) and _dur < 3.0:
+            logger.info(f"Input check: rejected — duration {_dur}s below 3s minimum")
+            return jsonify({
+                "error": "This clip is too short to analyze. Upload at least 3 seconds of audio.",
+                "reason": "duration_too_short",
+            }), 400
+
+        if isinstance(_rms, (int, float)) and _rms < 0.001:
+            logger.info(f"Input check: rejected — avg_rms {_rms} below 0.001 (silent/dead mic)")
+            return jsonify({
+                "error": "We couldn't hear anything in this recording. Check that your mic was on and the audio isn't muted, then try again.",
+                "reason": "no_audio_detected",
+            }), 400
+
+        logger.info(f"Input check: passed (avg_rms={_rms}, duration={_dur})")
         
         # ─── Step 6: Reference comparison ───────────────────────────
         logger.info(f"Step 6: Resolving reference (critique_mode={song_critique_mode})...")
