@@ -594,6 +594,58 @@ NEVER split the difference — a G-shape on fret 6 is G or Concert C#, NEVER "G#
             prompt += f"""
 - NOTE: voiced_ratio is low ({voiced_ratio}) — this is polyphonic or strummed audio where PYIN cannot reliably track a single fundamental. DO NOT cite specific cents-off values, drift numbers, or off-pitch segments. Comment on pitch only at the chord/chroma level."""
 
+    # Instrument-family vocabulary (Phase 5.5 item 3). Gives the model the
+    # working language of the instrument actually played. Presentation layer
+    # only -- the underlying analysis is unchanged and instrument-agnostic.
+    # Substring matching is deliberately loose; a player who lists two
+    # instruments gets both blocks and the model picks what applies.
+    _INSTRUMENT_VOCAB = {
+        "fretted": (
+            ["guitar", "ukulele", "banjo", "mandolin", "bass"],
+            "FRETTED-STRING VOCABULARY: fretting-hand finger placement, thumb position on the neck, "
+            "chord voicings and inversions, barre technique, capo placement relative to the fret wire, "
+            "picking vs strumming attack, pick grip and wrist rotation, palm muting, buzz from incomplete "
+            "fretting, string bending, hammer-ons and pull-offs, unintentionally muted strings.",
+        ),
+        "keys": (
+            ["piano", "keyboard", "organ", "synth"],
+            "KEYBOARD VOCABULARY: voicing and voice-leading, hand independence, sustain-pedal timing "
+            "(catching the chord change cleanly rather than blurring across it), touch and key attack, "
+            "dynamic balance between hands, legato and articulation, rubato, comping density.",
+        ),
+        "bowed": (
+            ["violin", "viola", "cello", "fiddle", "upright bass", "double bass"],
+            "BOWED-STRING VOCABULARY: bow pressure, bow speed, contact point, bow distribution across the "
+            "stroke, string crossings, left-hand intonation and shifting, vibrato width and speed, tone "
+            "production, legato vs detache vs spiccato articulation.",
+        ),
+        "wind": (
+            ["saxophone", "trumpet", "flute", "clarinet", "trombone", "brass", "horn", "oboe", "harmonica"],
+            "WIND/BRASS VOCABULARY: embouchure stability, breath support and air speed, tonguing and "
+            "articulation, intonation across registers, tone consistency between low and high register, "
+            "phrase length and breath placement, dynamic control without pitch drift.",
+        ),
+        "percussion": (
+            ["drum", "percussion", "cajon", "conga", "bongo"],
+            "PERCUSSION VOCABULARY: stick control and rebound, ghost notes, limb independence, groove "
+            "placement relative to the beat (ahead, behind, or on top), dynamic balance between kit voices, "
+            "ride and hi-hat articulation, fill construction and how cleanly fills re-enter the groove.",
+        ),
+    }
+    _instr_lower = instrument.lower()
+    _matched_vocab = [
+        _block for (_keys, _block) in _INSTRUMENT_VOCAB.values()
+        if any(_k in _instr_lower for _k in _keys)
+    ]
+    if _matched_vocab:
+        prompt += (
+            "\n\nINSTRUMENT-SPECIFIC LANGUAGE: use the working vocabulary of the instrument actually "
+            "played, so the feedback reads as though it came from a teacher of that instrument. Do not "
+            "force these terms in where they do not apply -- reach for them when an observation genuinely "
+            "calls for one.\n"
+        )
+        prompt += "\n".join(f"- {_b}" for _b in _matched_vocab)
+
     # Vocal-instrument coordination
     user_says_vocals = "vocal" in instrument.lower()
 
