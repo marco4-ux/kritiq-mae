@@ -334,8 +334,13 @@ def upsert_song(song_title: str, song_artist: str) -> str:
             f"{SUPABASE_URL}/rest/v1/songs",
             headers=_supabase_headers(),
             params={
-                "title": f"eq.{song_title}",
-                "artist": f"eq.{song_artist}",
+                # Case- and whitespace-insensitive match. "Same boat",
+                # "same boat" and "Same Boat " are one song, and each songs
+                # row is its own set of 6 leaderboards -- fragmenting titles
+                # fragments the boards. % and _ are escaped so titles
+                # containing them are not treated as wildcards.
+                "title": "ilike." + song_title.strip().replace("%", r"\%").replace("_", r"\_"),
+                "artist": "ilike." + song_artist.strip().replace("%", r"\%").replace("_", r"\_"),
                 "select": "id",
                 "limit": "1",
             },
@@ -347,8 +352,8 @@ def upsert_song(song_title: str, song_artist: str) -> str:
             return rows[0].get("id")
         
         payload = {
-            "title": song_title,
-            "artist": song_artist,
+            "title": song_title.strip(),
+            "artist": song_artist.strip(),
         }
         resp = http_requests.post(
             f"{SUPABASE_URL}/rest/v1/songs",
@@ -1577,7 +1582,12 @@ def leaderboard():
                 "status": "eq.completed",
                 "select": "id,user_id,scores,instrument,style,created_at",
                 "order": "scores->>overall.desc.nullslast",
-                "limit": str(LEADERBOARD_LIMIT),
+                # Over-fetch: one entry per user is applied below, so the
+                # raw row count must exceed the final board size. PostgREST
+                # cannot express DISTINCT ON, so dedupe happens in Python.
+                # Fine at current scale; revisit with a DB view if a single
+                # silo ever exceeds this many rows.
+                "limit": "1000",
             },
             timeout=15,
         )
@@ -1589,8 +1599,12 @@ def leaderboard():
 
     names = _fetch_display_names(list({r["user_id"] for r in rows if r.get("user_id")}))
 
-    entries = []
-    for i, r in enumerate(rows, start=1):
+    # One entry per user per board: their best score in this silo.
+    # Gate 1 only blocks identical files, so without this a single user can
+    # fill the board with repeated takes of the same song and crowd everyone
+    # else out -- fatal for a prize competition.
+    best_by_user = {}
+    for r in rows:
         scores = r.get("scores") or {}
         if isinstance(scores, str):
             try:
@@ -1600,15 +1614,24 @@ def leaderboard():
         overall = scores.get("overall")
         if overall is None:
             continue  # unscored rows never rank
-        entries.append({
-            "rank": i,
-            "user_id": r.get("user_id"),   # for the profile-card tap only
-            "username": names.get(r.get("user_id")) or "Anonymous",
-            "score": overall,
-            "instrument": r.get("instrument"),  # NULL on pre-5.5 rows
-            "mode": r.get("style"),
-            "date": (r.get("created_at") or "")[:10],
-        })
+        uid = r.get("user_id")
+        if uid is None:
+            continue  # anonymous submissions never reach submissions/boards
+        prev = best_by_user.get(uid)
+        if prev is None or overall > prev["score"]:
+            best_by_user[uid] = {
+                "user_id": uid,
+                "username": names.get(uid) or "Anonymous",
+                "score": overall,
+                "instrument": r.get("instrument"),  # NULL on pre-5.5 rows
+                "mode": r.get("style"),
+                "date": (r.get("created_at") or "")[:10],
+            }
+
+    entries = sorted(best_by_user.values(), key=lambda e: e["score"], reverse=True)
+    entries = entries[:LEADERBOARD_LIMIT]
+    for i, e in enumerate(entries, start=1):
+        e["rank"] = i
 
     logger.info(
         f"Leaderboard: song={song_id[:8]} mode={mode} tier={skill_level} "
