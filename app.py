@@ -407,6 +407,61 @@ def check_duplicate_submission(file_hash: str, skill_level: str, user_id: str) -
         return False  # fail open — never block feedback on an infra error
 
 
+def ensure_display_name(user_id: str, user_email: str) -> None:
+    """
+    Phase 5.5: leaderboards show usernames, and the signup screen promises
+    an editable one. The signup trigger creates the profile row but leaves
+    display_name NULL, so fill it from the email prefix on first submission
+    -- matching the convention already used in the public archive.
+
+    Deliberately NOT done in the auth trigger: modifying the signup path
+    risks breaking account creation. Nobody reaches a leaderboard without
+    submitting, so this runs early enough.
+
+    Only ever fills a NULL. A user who has set their own name is never
+    overwritten. Fails silently -- a missing name must not fail a submission.
+    """
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not user_id or not user_email:
+        return
+    try:
+        resp = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/profiles",
+            headers=_supabase_headers(),
+            params={"id": f"eq.{user_id}", "select": "display_name", "limit": "1"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if rows and rows[0].get("display_name"):
+            return  # already set (default or user-chosen) -- leave it alone
+
+        candidate = (user_email.split("@")[0] or "").strip()
+        if not candidate:
+            return
+
+        # display_name is uniquely indexed (case-insensitive). On collision,
+        # suffix with a short slice of the user id rather than failing.
+        patch = http_requests.patch(
+            f"{SUPABASE_URL}/rest/v1/profiles",
+            headers=_supabase_headers(),
+            params={"id": f"eq.{user_id}"},
+            json={"display_name": candidate},
+            timeout=10,
+        )
+        if patch.status_code >= 400:
+            fallback = f"{candidate}_{str(user_id)[:4]}"
+            logger.info(f"display_name '{candidate}' unavailable, trying '{fallback}'")
+            http_requests.patch(
+                f"{SUPABASE_URL}/rest/v1/profiles",
+                headers=_supabase_headers(),
+                params={"id": f"eq.{user_id}"},
+                json={"display_name": fallback},
+                timeout=10,
+            )
+    except Exception as e:
+        logger.warning(f"ensure_display_name failed (non-fatal): {e}")
+
+
 def get_prior_submissions(user_id: str, song_id: str, limit: int = 3) -> list:
     """
     Phase 5.5 (feedback callbacks): this user's previous submissions of the
@@ -553,6 +608,9 @@ def save_submission(data: dict) -> str:
                 "file_hash": data.get("file_hash"),
                 "leaderboard_eligible": data.get("leaderboard_eligible", True),
                 "visual_kind": data.get("visual_kind"),
+                # Phase 5.5: leaderboards display instrument per Andy's spec.
+                # Historical rows are NULL -- the board UI must tolerate that.
+                "instrument": data.get("instrument"),
             }
             resp = http_requests.post(
                 f"{SUPABASE_URL}/rest/v1/submissions",
@@ -1817,7 +1875,10 @@ def analyze():
                 "file_hash": file_hash,
                 "leaderboard_eligible": not is_duplicate,
                 "visual_kind": visual_kind,
+                # Phase 5.5 fields
+                "instrument": instrument or None,
             }
+            ensure_display_name(user_id, user_email)
             submission_id = save_submission(submission_data)
         except Exception as e:
             logger.warning(f"Failed to save submission: {e}")
