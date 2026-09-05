@@ -1518,7 +1518,11 @@ LEADERBOARD_LIMIT = 100
 # Visual analysis (presence + technique cards) disabled at Andy's request:
 # the output was dominated by camera/framing notes rather than musical
 # coaching. Set True to restore -- all the code paths remain intact.
-VISUAL_ANALYSIS_ENABLED = False
+VISUAL_ANALYSIS_ENABLED = True
+
+# Dual visual (presence + technique on sing-and-play) disabled at Andy's
+# request -- he wants the presence card only. Set True to restore.
+DUAL_VISUAL_ENABLED = False
 
 
 def _fetch_display_names(user_ids: list) -> dict:
@@ -1998,7 +2002,7 @@ def analyze():
                            "trumpet", "brass", "drum", "percussion")
             )
 
-            if _sings and _plays:
+            if DUAL_VISUAL_ENABLED and _sings and _plays:
                 # Phase 5.5 item 5: sing-and-play gets BOTH cards. Two separate
                 # Vision calls rather than one combined prompt -- the technique
                 # card's value is its specificity, and sharing a token budget
