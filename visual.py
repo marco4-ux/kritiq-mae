@@ -54,6 +54,9 @@ hold/positioning, bow technique (for bowed instruments), fretting/picking
 technique, pedal or hardware technique, equipment setup and care, framing and
 lighting ONLY as they affect visibility of technique.
 
+IDENTITY — ABSOLUTE: Never name, identify, or speculate about WHO the performers
+are — not the person, not the band. Describe only what is visible.
+
 OUT-OF-BOUNDS (never comment on): eye contact, stage presence, performance
 energy, engagement, charisma, emotional expression, body shape, weight,
 physical features, skin, facial features, age appearance, physical disability,
