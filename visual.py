@@ -205,8 +205,14 @@ Respond ONLY with valid JSON:
     "summary": "1-2 sentence visual assessment"
 }
 
-Include 3-5 items in visual_feedback covering: framing/camera angle, lighting, 
-posture/technique, energy/engagement, and gear/environment.
+LENGTH — this card sits alongside the written feedback and must not dwarf it:
+- EXACTLY 3 items in visual_feedback. Pick the 3 that would most improve the
+  video, not one from every category.
+- Each "point" headline: under 8 words.
+- Each "detail": 2 sentences, 40 words MAX. One observation, one fix.
+- The summary: 1 sentence.
+Available angles (choose only the 3 that matter most here): framing/camera
+angle, lighting, posture/technique, energy/engagement, gear/environment.
 Do NOT include any text outside the JSON."""
 
 
@@ -254,7 +260,9 @@ Respond ONLY with valid JSON:
     "summary": "1-2 sentence technique assessment"
 }}
 
-Include 3-5 items in visual_feedback, all technique- or setup-focused.
+LENGTH: EXACTLY 3 items in visual_feedback, all technique- or setup-focused.
+Each "point" under 8 words. Each "detail" 2 sentences, 40 words MAX. Summary
+1 sentence.
 Do NOT include any text outside the JSON."""
 
 
