@@ -1515,6 +1515,11 @@ def search_songs():
 
 LEADERBOARD_LIMIT = 100
 
+# Visual analysis (presence + technique cards) disabled at Andy's request:
+# the output was dominated by camera/framing notes rather than musical
+# coaching. Set True to restore -- all the code paths remain intact.
+VISUAL_ANALYSIS_ENABLED = False
+
 
 def _fetch_display_names(user_ids: list) -> dict:
     """Map user_id -> display_name for a batch of ids. Missing names are
@@ -1977,7 +1982,10 @@ def analyze():
         instrument = request.form.get("instrument", "")
         visual_kind = None
 
-        if audio_only:
+        if not VISUAL_ANALYSIS_ENABLED:
+            logger.info("Step 7: Visual analysis disabled - skipping")
+            t_visual = t4
+        elif audio_only:
             logger.info("Step 7: Audio-only submission — skipping visual analysis")
             t_visual = t4
         else:
