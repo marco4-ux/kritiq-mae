@@ -1489,10 +1489,22 @@ def search_songs():
         # and a live 1991 recording, with the studio original absent. Sorting
         # by popularity puts the recording most people mean at the top.
         # Stable sort -- if the field is missing, Deezer's order is kept.
+        # Deezer's own ordering is by `rank` (global popularity), which puts
+        # covers above originals -- a cover of "Smells Like Teen Spirit"
+        # ranks 729278 vs Nirvana's 676966 -- and scatters live/remaster
+        # variants through the list. `title_version` is empty on primary
+        # studio recordings and populated on every variant ("(Live)",
+        # "(Remastered 2021)", "(Rehearsal)"), so sort primary recordings
+        # first, then by popularity within each group.
+        # This does NOT decide original-vs-cover: both are primary
+        # recordings, and only the performer knows which they covered.
+        # It exists so the live version stops outranking the studio take.
         tracks = sorted(
             data.get("data", []),
-            key=lambda t: t.get("rank") or 0,
-            reverse=True,
+            key=lambda t: (
+                0 if not (t.get("title_version") or "").strip() else 1,
+                -(t.get("rank") or 0),
+            ),
         )
 
         results = []
