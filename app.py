@@ -1478,15 +1478,26 @@ def search_songs():
     try:
         resp = http_requests.get(
             "https://api.deezer.com/search",
-            params={"q": query, "limit": 5},
+            params={"q": query, "limit": 25},
             timeout=5,
         )
         resp.raise_for_status()
         data = resp.json()
-        
+
+        # Deezer's relevance ordering buries the original under covers: a
+        # search for "smells like teen spirit" returned five cover versions
+        # and a live 1991 recording, with the studio original absent. Sorting
+        # by popularity puts the recording most people mean at the top.
+        # Stable sort -- if the field is missing, Deezer's order is kept.
+        tracks = sorted(
+            data.get("data", []),
+            key=lambda t: t.get("rank") or 0,
+            reverse=True,
+        )
+
         results = []
         seen = set()
-        for track in data.get("data", []):
+        for track in tracks:
             title = track.get("title", "")
             artist = track.get("artist", {}).get("name", "")
             key = f"{title.lower()}|{artist.lower()}"
