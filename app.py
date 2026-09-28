@@ -1678,6 +1678,264 @@ def leaderboard():
     })
 
 
+# ─── Phase 6: admin view ─────────────────────────────────────────────
+# Andy should not need the Supabase dashboard to run his own product.
+# These back an admin tab inside the app.
+#
+# Every endpoint checks is_admin SERVER-SIDE. Hiding the tab in the
+# frontend is cosmetic; this guard is what actually protects the data.
+# Unlike Gate 1 (which fails open so infra errors never block feedback),
+# these fail CLOSED -- an unverifiable admin check denies access.
+
+ADMIN_ROLLING_WINDOW_DAYS = 7
+ADMIN_AUTOFLAG_THRESHOLD = 3
+
+
+def _require_admin(auth_header: str):
+    """Returns (user_id, None) for an admin, else (None, (response, status))."""
+    user_id, user_email, auth_error = verify_supabase_jwt(auth_header)
+    if auth_error or not user_id:
+        return None, (jsonify({"error": "Authentication required"}), 401)
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return None, (jsonify({"error": "Server not configured"}), 500)
+    try:
+        resp = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/profiles",
+            headers=_supabase_headers(),
+            params={"id": f"eq.{user_id}", "select": "is_admin", "limit": "1"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json() or []
+    except Exception as e:
+        logger.warning(f"Admin check failed: {e}")
+        return None, (jsonify({"error": "Could not verify admin access"}), 502)
+    if not rows or not rows[0].get("is_admin"):
+        return None, (jsonify({"error": "Not authorized"}), 403)
+    return user_id, None
+
+
+@app.route("/admin/rejections", methods=["GET", "OPTIONS"])
+def admin_rejections():
+    """Gate 1 rejection log, newest first, with usernames resolved."""
+    if request.method == "OPTIONS":
+        return '', 200
+    _admin, err = _require_admin(request.headers.get("Authorization", ""))
+    if err:
+        return err
+    try:
+        resp = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/rejection_logs",
+            headers=_supabase_headers(),
+            params={
+                "select": "id,account_id,created_at,reason,song_title,song_artist,file_hash,skill_level",
+                "order": "created_at.desc",
+                "limit": "200",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        rows = resp.json() or []
+    except Exception as e:
+        logger.warning(f"Admin rejections query failed: {e}")
+        return jsonify({"error": "Could not load rejection logs"}), 502
+
+    names = _fetch_display_names(
+        list({r["account_id"] for r in rows if r.get("account_id")})
+    )
+    for r in rows:
+        r["username"] = names.get(r.get("account_id")) or "Unknown"
+        r["file_hash_short"] = (r.get("file_hash") or "")[:12]
+
+    logger.info(f"Admin: rejection log requested ({len(rows)} rows)")
+    return jsonify({"count": len(rows), "rejections": rows})
+
+
+@app.route("/admin/activity", methods=["GET", "OPTIONS"])
+def admin_activity():
+    """Submission totals per day, per song and per account.
+
+    PostgREST cannot GROUP BY, so rows are fetched and aggregated here.
+    Capped at 5000 -- fine at current volume; revisit with a database
+    view if submissions ever exceed that.
+    """
+    if request.method == "OPTIONS":
+        return '', 200
+    _admin, err = _require_admin(request.headers.get("Authorization", ""))
+    if err:
+        return err
+    try:
+        resp = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/submissions",
+            headers=_supabase_headers(),
+            params={
+                "select": "user_id,created_at,song_id,songs(title,artist)",
+                "order": "created_at.desc",
+                "limit": "5000",
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+        rows = resp.json() or []
+    except Exception as e:
+        logger.warning(f"Admin activity query failed: {e}")
+        return jsonify({"error": "Could not load activity"}), 502
+
+    per_day, per_song, per_account = {}, {}, {}
+    for r in rows:
+        day = (r.get("created_at") or "")[:10]
+        if day:
+            per_day[day] = per_day.get(day, 0) + 1
+        song = r.get("songs") or {}
+        if song.get("title"):
+            label = f"{song['title']} - {song.get('artist') or 'Unknown'}"
+            per_song[label] = per_song.get(label, 0) + 1
+        uid = r.get("user_id")
+        if uid:
+            per_account[uid] = per_account.get(uid, 0) + 1
+
+    names = _fetch_display_names(list(per_account.keys()))
+
+    return jsonify({
+        "total_submissions": len(rows),
+        "per_day": [
+            {"date": d, "count": c}
+            for d, c in sorted(per_day.items(), reverse=True)[:30]
+        ],
+        "per_song": [
+            {"song": s, "count": c}
+            for s, c in sorted(per_song.items(), key=lambda kv: kv[1], reverse=True)[:50]
+        ],
+        "per_account": [
+            {"user_id": u, "username": names.get(u) or "Unknown", "count": c}
+            for u, c in sorted(per_account.items(), key=lambda kv: kv[1], reverse=True)[:50]
+        ],
+    })
+
+
+@app.route("/admin/accounts", methods=["GET", "OPTIONS"])
+def admin_accounts():
+    """Accounts with rolling-window rejection counts and flag status.
+
+    Per spec: 3+ gate rejections in a rolling 7-day window surfaces an
+    account for review. That condition is COMPUTED on every request --
+    the window moves daily, so a stored flag would go stale within a day.
+    Cleared status does NOT exempt an account; the counter keeps running.
+    Nothing here bans automatically.
+    """
+    if request.method == "OPTIONS":
+        return '', 200
+    _admin, err = _require_admin(request.headers.get("Authorization", ""))
+    if err:
+        return err
+
+    # Local import so this does not depend on the module-level import list.
+    from datetime import timedelta
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=ADMIN_ROLLING_WINDOW_DAYS)
+    ).isoformat()
+
+    try:
+        rej = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/rejection_logs",
+            headers=_supabase_headers(),
+            params={
+                "created_at": f"gte.{cutoff}",
+                "select": "account_id",
+                "limit": "5000",
+            },
+            timeout=15,
+        )
+        rej.raise_for_status()
+        recent = rej.json() or []
+
+        prof = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/profiles",
+            headers=_supabase_headers(),
+            params={
+                "select": "id,display_name,flag_status,flag_note,flagged_at",
+                "limit": "1000",
+            },
+            timeout=15,
+        )
+        prof.raise_for_status()
+        profiles = prof.json() or []
+    except Exception as e:
+        logger.warning(f"Admin accounts query failed: {e}")
+        return jsonify({"error": "Could not load accounts"}), 502
+
+    counts = {}
+    for r in recent:
+        uid = r.get("account_id")
+        if uid:
+            counts[uid] = counts.get(uid, 0) + 1
+
+    accounts = []
+    for p in profiles:
+        uid = p.get("id")
+        n = counts.get(uid, 0)
+        accounts.append({
+            "user_id": uid,
+            "username": p.get("display_name") or "Unknown",
+            "recent_rejections": n,
+            "auto_flagged": n >= ADMIN_AUTOFLAG_THRESHOLD,
+            "flag_status": p.get("flag_status"),
+            "flag_note": p.get("flag_note"),
+            "flagged_at": p.get("flagged_at"),
+        })
+
+    accounts.sort(key=lambda a: (-a["recent_rejections"], a["username"].lower()))
+    return jsonify({
+        "window_days": ADMIN_ROLLING_WINDOW_DAYS,
+        "threshold": ADMIN_AUTOFLAG_THRESHOLD,
+        "count": len(accounts),
+        "accounts": accounts,
+    })
+
+
+@app.route("/admin/flag", methods=["POST", "OPTIONS"])
+def admin_flag():
+    """Set an account's flag status. Manual only, per spec -- no automatic bans."""
+    if request.method == "OPTIONS":
+        return '', 200
+    admin_id, err = _require_admin(request.headers.get("Authorization", ""))
+    if err:
+        return err
+
+    body = request.get_json(silent=True) or {}
+    target = (body.get("user_id") or "").strip()
+    status = (body.get("flag_status") or "").strip()
+    note = body.get("flag_note")
+
+    if not target:
+        return jsonify({"error": "user_id is required"}), 400
+    if status not in ("Pending Review", "Cleared", "Banned", ""):
+        return jsonify({
+            "error": "flag_status must be 'Pending Review', 'Cleared', 'Banned', or empty to clear"
+        }), 400
+
+    payload = {
+        "flag_status": status or None,
+        "flag_note": note,
+        "flagged_at": datetime.now(timezone.utc).isoformat() if status else None,
+    }
+    try:
+        resp = http_requests.patch(
+            f"{SUPABASE_URL}/rest/v1/profiles",
+            headers=_supabase_headers(),
+            params={"id": f"eq.{target}"},
+            json=payload,
+            timeout=10,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        logger.warning(f"Admin flag update failed: {e}")
+        return jsonify({"error": "Could not update flag status"}), 502
+
+    logger.info(f"Admin {admin_id[:8]} set flag_status={status or 'none'} on {target[:8]}")
+    return jsonify({"status": "ok", "user_id": target, "flag_status": status or None})
+
+
 @app.route("/leaderboard/songs", methods=["GET", "OPTIONS"])
 def leaderboard_songs():
     """Songs that have at least one eligible entry, so the frontend can
