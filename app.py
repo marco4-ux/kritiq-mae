@@ -1543,6 +1543,11 @@ LEADERBOARD_LIMIT = 100
 # coaching. Set True to restore -- all the code paths remain intact.
 VISUAL_ANALYSIS_ENABLED = True
 
+# Launch prep: /analyze requires a signed-in user. Without this, anyone
+# calling the endpoint directly gets free analysis on Andy's API budget,
+# whatever the frontend shows. Mirror of REQUIRE_LOGIN in App.tsx.
+REQUIRE_LOGIN = True
+
 # Dual visual (presence + technique on sing-and-play) disabled at Andy's
 # request -- he wants the presence card only. Set True to restore.
 DUAL_VISUAL_ENABLED = False
@@ -2047,6 +2052,8 @@ def analyze():
     user_id, user_email, auth_error = verify_supabase_jwt(auth_header)
     if auth_header and auth_error:
         return jsonify({"error": f"Authentication failed: {auth_error}"}), 401
+    if REQUIRE_LOGIN and not user_id:
+        return jsonify({"error": "Please sign in to submit a performance."}), 401
     
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
