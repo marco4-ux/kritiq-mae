@@ -2024,6 +2024,126 @@ def public_profile(user_id):
         return jsonify({"error": "Could not load profile"}), 502
 
 
+# ─── Launch prep: hum-to-search (ACRCloud) ───────────────────────────
+# The browser records ~10s of humming; we normalize it with FFmpeg (phone
+# browsers record in different formats), sign the request per ACRCloud's
+# Identify Protocol V1, and return up to 5 candidate songs.
+# Credentials live in Railway env vars, billed to Andy's ACRCloud account.
+
+ACRCLOUD_HOST = os.environ.get("ACRCLOUD_HOST", "")
+ACRCLOUD_ACCESS_KEY = os.environ.get("ACRCLOUD_ACCESS_KEY", "")
+ACRCLOUD_ACCESS_SECRET = os.environ.get("ACRCLOUD_ACCESS_SECRET", "")
+HUM_MAX_SECONDS = 15
+
+
+@app.route("/identify-hum", methods=["POST", "OPTIONS"])
+def identify_hum():
+    # Local imports on purpose: don't depend on module-level import order.
+    import base64, hashlib, hmac, subprocess, tempfile, time as _time
+
+    if request.method == "OPTIONS":
+        return '', 200
+
+    auth_header = request.headers.get("Authorization", "")
+    user_id, _email, auth_error = verify_supabase_jwt(auth_header)
+    if (auth_header and auth_error) or (REQUIRE_LOGIN and not user_id):
+        return jsonify({"error": "Please sign in to use hum search."}), 401
+
+    host = ACRCLOUD_HOST.replace("https://", "").replace("http://", "").strip("/")
+    if not (host and ACRCLOUD_ACCESS_KEY and ACRCLOUD_ACCESS_SECRET):
+        return jsonify({"error": "Hum search isn't set up yet."}), 503
+    if "file" not in request.files:
+        return jsonify({"error": "No recording received."}), 400
+
+    raw_path = tempfile.mktemp(suffix=".upload")
+    wav_path = tempfile.mktemp(suffix=".wav")
+    try:
+        request.files["file"].save(raw_path)
+        conv = subprocess.run(
+            ["ffmpeg", "-y", "-i", raw_path, "-t", str(HUM_MAX_SECONDS),
+             "-ac", "1", "-ar", "8000", wav_path],
+            capture_output=True, timeout=30,
+        )
+        if conv.returncode != 0 or not os.path.exists(wav_path):
+            logger.warning(f"Hum: FFmpeg conversion failed: {conv.stderr[-300:]!r}")
+            return jsonify({"error": "Couldn't read that recording. Try again."}), 400
+        with open(wav_path, "rb") as f:
+            sample = f.read()
+
+        http_method, http_uri = "POST", "/v1/identify"
+        data_type, signature_version = "audio", "1"
+        timestamp = str(int(_time.time()))
+        string_to_sign = "\n".join([
+            http_method, http_uri, ACRCLOUD_ACCESS_KEY,
+            data_type, signature_version, timestamp,
+        ])
+        signature = base64.b64encode(
+            hmac.new(
+                ACRCLOUD_ACCESS_SECRET.encode("ascii"),
+                string_to_sign.encode("ascii"),
+                digestmod=hashlib.sha1,
+            ).digest()
+        ).decode("ascii")
+
+        resp = http_requests.post(
+            f"https://{host}{http_uri}",
+            files={"sample": ("hum.wav", sample, "audio/wav")},
+            data={
+                "access_key": ACRCLOUD_ACCESS_KEY,
+                "sample_bytes": str(len(sample)),
+                "timestamp": timestamp,
+                "signature": signature,
+                "data_type": data_type,
+                "signature_version": signature_version,
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+    except Exception as e:
+        logger.warning(f"Hum: identify request failed: {e}")
+        return jsonify({"error": "Hum search is unavailable right now. Try again."}), 502
+    finally:
+        for p in (raw_path, wav_path):
+            try:
+                if os.path.exists(p):
+                    os.unlink(p)
+            except Exception:
+                pass
+
+    status = result.get("status") or {}
+    code = status.get("code")
+    metadata = result.get("metadata") or {}
+    # Always logged: the first live test tells us exactly where ACRCloud
+    # puts humming results, instead of trusting an assumption.
+    logger.info(
+        f"Hum: ACRCloud status={code} msg={status.get('msg')!r} "
+        f"metadata_keys={list(metadata.keys())}"
+    )
+    if code != 0:
+        # Non-zero = no match or an ACRCloud-side error; the log line says which.
+        return jsonify({"matches": []})
+
+    candidates = metadata.get("humming") or metadata.get("music") or []
+    matches, seen = [], set()
+    for c in candidates:
+        title = (c.get("title") or "").strip()
+        artist = ", ".join(
+            a.get("name", "") for a in (c.get("artists") or []) if a.get("name")
+        )
+        if not title:
+            continue
+        key = (title.lower(), artist.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        matches.append({"title": title, "artist": artist or "Unknown", "score": c.get("score")})
+        if len(matches) >= 5:
+            break
+
+    return jsonify({"matches": matches})
+
+
 @app.route("/analyze", methods=["POST", "OPTIONS"])
 def analyze():
     """
