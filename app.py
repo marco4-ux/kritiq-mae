@@ -1696,6 +1696,106 @@ ADMIN_ROLLING_WINDOW_DAYS = 7
 ADMIN_AUTOFLAG_THRESHOLD = 3
 
 
+# ─── Welcome email (Resend) ──────────────────────────────────────
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+SITE_URL = os.environ.get("SITE_URL", "https://www.kritiqmusic.com")
+WELCOME_FROM = "Kritiq <noreply@kritiqmusic.com>"
+
+WELCOME_TEXT = (
+    "Welcome to Kritiq\n\n"
+    "Your account is ready. Here's what you can do:\n\n"
+    "- Upload a performance (a cover or an original) and get detailed feedback on your playing.\n"
+    "- Track your progress across submissions.\n"
+    "- Compete on the leaderboards for each song, style and skill level.\n"
+    "- Can't remember a song's name? Hum it in the HUM tab.\n\n"
+    f"Upload your first performance: {SITE_URL}\n\n"
+    "Kritiq - kritiqmusic.com"
+)
+
+WELCOME_HTML = f"""<div style="background:#0a1f1c;padding:40px 20px;font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" style="max-width:480px;margin:0 auto;background:#0f2b27;border:1px solid #1d4a43;border-radius:8px;">
+    <tr><td style="padding:32px;">
+      <p style="margin:0 0 4px;color:#2dd4bf;font-size:13px;letter-spacing:3px;">KRITIQ</p>
+      <h1 style="margin:0 0 20px;color:#ffffff;font-size:22px;">Welcome to Kritiq</h1>
+      <p style="margin:0 0 16px;color:#c7d9d6;font-size:15px;line-height:1.5;">Your account is ready. Here's what you can do:</p>
+      <ul style="margin:0 0 16px;padding-left:20px;color:#c7d9d6;font-size:15px;line-height:1.6;">
+        <li>Upload a performance (a cover or an original) and get detailed feedback on your playing.</li>
+        <li>Track your progress across submissions.</li>
+        <li>Compete on the leaderboards for each song, style and skill level.</li>
+        <li>Can't remember a song's name? Hum it in the HUM tab.</li>
+      </ul>
+      <p style="margin:24px 0;">
+        <a href="{SITE_URL}" style="display:inline-block;background:#2dd4bf;color:#0a1f1c;text-decoration:none;font-weight:bold;padding:12px 24px;border-radius:6px;">Upload your first performance</a>
+      </p>
+      <p style="margin:24px 0 0;color:#5f7f7a;font-size:12px;">Kritiq &middot; kritiqmusic.com</p>
+    </td></tr>
+  </table>
+</div>"""
+
+
+@app.route("/welcome", methods=["POST", "OPTIONS"])
+def send_welcome():
+    """
+    One-time welcome email. The frontend calls this on sign-in; repeat calls
+    are no-ops. The profile row is claimed atomically (welcome_sent
+    false -> true) BEFORE sending, so concurrent calls can't double-send.
+    If Resend fails, the flag is reset so the next sign-in retries.
+    """
+    if request.method == "OPTIONS":
+        return '', 200
+    user_id, user_email, auth_error = verify_supabase_jwt(request.headers.get("Authorization", ""))
+    if auth_error or not user_id or not user_email:
+        return jsonify({"error": "Authentication required"}), 401
+    if not RESEND_API_KEY or not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return jsonify({"sent": False, "reason": "not_configured"}), 200
+
+    profile_url = f"{SUPABASE_URL}/rest/v1/profiles"
+    try:
+        claim = http_requests.patch(
+            profile_url,
+            headers={**_supabase_headers(), "Prefer": "return=representation"},
+            params={"id": f"eq.{user_id}", "welcome_sent": "eq.false"},
+            json={"welcome_sent": True},
+            timeout=10,
+        )
+        claim.raise_for_status()
+        if not claim.json():
+            return jsonify({"sent": False, "reason": "already_sent"}), 200
+    except Exception as e:
+        logger.warning(f"Welcome: claim failed: {e}")
+        return jsonify({"sent": False, "reason": "claim_failed"}), 200
+
+    try:
+        r = http_requests.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+            json={
+                "from": WELCOME_FROM,
+                "to": [user_email],
+                "subject": "Welcome to Kritiq",
+                "html": WELCOME_HTML,
+                "text": WELCOME_TEXT,
+            },
+            timeout=10,
+        )
+        r.raise_for_status()
+        logger.info(f"Welcome: sent to user {user_id}")
+        return jsonify({"sent": True}), 200
+    except Exception as e:
+        logger.warning(f"Welcome: send failed: {e}")
+        try:
+            http_requests.patch(
+                profile_url,
+                headers=_supabase_headers(),
+                params={"id": f"eq.{user_id}"},
+                json={"welcome_sent": False},
+                timeout=10,
+            )
+        except Exception:
+            pass
+        return jsonify({"sent": False, "reason": "send_failed"}), 200
+
+
 def _require_admin(auth_header: str):
     """Returns (user_id, None) for an admin, else (None, (response, status))."""
     user_id, user_email, auth_error = verify_supabase_jwt(auth_header)
