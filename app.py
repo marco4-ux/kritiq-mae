@@ -2153,6 +2153,13 @@ _HUM_DASH_RE = _re.compile(
 )
 
 
+_HUM_VARIANT_RE = _re.compile(
+    r"\b(?:remix|live|acoustic|instrumental|ao vivo|en vivo|cover|karaoke|"
+    r"demo|sped up|slowed|tribute)\b",
+    _re.IGNORECASE,
+)
+
+
 def _clean_hum_title(title: str) -> str:
     t = _HUM_PAREN_RE.sub("", title or "")
     t = _HUM_DASH_RE.sub("", t)
@@ -2182,8 +2189,11 @@ def _canonical_version(title: str):
     ]
     if not same:
         return None
-    # Primary recordings (no title_version) first, then most popular.
-    same.sort(key=lambda d: (bool(d.get("title_version")), -(d.get("rank") or 0)))
+    # Demote real variants (remix/live/cover...) but NOT remasters or new
+    # mixes: "Ticket To Ride (Remastered 2015)" IS the Beatles original.
+    def _is_variant(d):
+        return bool(_HUM_VARIANT_RE.search(d.get("title_version") or ""))
+    same.sort(key=lambda d: (_is_variant(d), -(d.get("rank") or 0)))
     best = same[0]
     return {
         "title": best.get("title_short") or best.get("title") or clean,
