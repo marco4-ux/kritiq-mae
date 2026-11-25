@@ -2134,6 +2134,7 @@ ACRCLOUD_HOST = os.environ.get("ACRCLOUD_HOST", "")
 ACRCLOUD_ACCESS_KEY = os.environ.get("ACRCLOUD_ACCESS_KEY", "")
 ACRCLOUD_ACCESS_SECRET = os.environ.get("ACRCLOUD_ACCESS_SECRET", "")
 HUM_MAX_SECONDS = 15
+HUM_KEEP_ARTIST_RATIO = 0.2  # keep ACRCloud's artist if >= 20% of top version's popularity
 
 # A hum matches the melody, so ACRCloud often returns a cover/remix of the
 # right song. Swap each match for the most popular primary recording of the
@@ -2166,8 +2167,14 @@ def _clean_hum_title(title: str) -> str:
     return t.strip()
 
 
-def _canonical_version(title: str):
-    """Most popular primary Deezer recording with the same title, or None."""
+def _canonical_version(title: str, acr_artist: str = ""):
+    """
+    Version to show for a hum match. Default: the most popular primary
+    Deezer recording with the same title. Exception: if ACRCloud's own
+    artist has that title on Deezer with at least HUM_KEEP_ARTIST_RATIO of
+    the top version's popularity, keep that artist -- it's a real version
+    (Spice Girls' "Too Much"), not an obscure cover act.
+    """
     clean = _clean_hum_title(title)
     if not clean:
         return None
@@ -2192,13 +2199,48 @@ def _canonical_version(title: str):
     # Demote real variants (remix/live/cover...) but NOT remasters or new
     # mixes: "Ticket To Ride (Remastered 2015)" IS the Beatles original.
     def _is_variant(d):
-        return bool(_HUM_VARIANT_RE.search(d.get("title_version") or ""))
-    same.sort(key=lambda d: (_is_variant(d), -(d.get("rank") or 0)))
-    best = same[0]
-    return {
-        "title": best.get("title_short") or best.get("title") or clean,
-        "artist": (best.get("artist") or {}).get("name", ""),
-    }
+        # Check the title too: some covers put "(Cover Ver.)" there.
+        text = f"{d.get('title') or ''} {d.get('title_version') or ''}"
+        return bool(_HUM_VARIANT_RE.search(text))
+
+    def _pick(items):
+        return sorted(items, key=lambda d: (_is_variant(d), -(d.get("rank") or 0)))[0]
+
+    def _as_match(d):
+        return {
+            "title": d.get("title_short") or d.get("title") or clean,
+            "artist": (d.get("artist") or {}).get("name", ""),
+        }
+
+    top = _pick(same)
+
+    # Does ACRCloud's own artist have this title, and is it a real version?
+    primary_artist = _re.split(r",|&| feat\.? | ft\.? ", acr_artist or "", maxsplit=1)[0].strip().lower()
+    if primary_artist:
+        own = [d for d in same if primary_artist in (d.get("artist") or {}).get("name", "").lower()]
+        if not own:
+            # Not in the title-only results; search title + artist directly.
+            try:
+                r2 = http_requests.get(
+                    "https://api.deezer.com/search",
+                    params={"q": f"{clean} {primary_artist}", "limit": 25},
+                    timeout=5,
+                )
+                r2.raise_for_status()
+                own = [
+                    d for d in (r2.json().get("data") or [])
+                    if _clean_hum_title(d.get("title_short") or d.get("title") or "").lower() == target
+                    and primary_artist in (d.get("artist") or {}).get("name", "").lower()
+                ]
+            except Exception as e:
+                logger.warning(f"Hum: Deezer artist lookup failed for {clean!r}/{primary_artist!r}: {e}")
+                own = []
+        if own:
+            own_best = _pick(own)
+            if (own_best.get("rank") or 0) >= HUM_KEEP_ARTIST_RATIO * (top.get("rank") or 0):
+                return _as_match(own_best)
+
+    return _as_match(top)
 
 
 @app.route("/identify-hum", methods=["POST", "OPTIONS"])
@@ -2313,7 +2355,7 @@ def identify_hum():
     # original often both resolve to the same canonical track.
     resolved, resolved_seen = [], set()
     for m in matches:
-        canon = _canonical_version(m.get("title", ""))
+        canon = _canonical_version(m.get("title", ""), m.get("artist", ""))
         if canon:
             logger.info(f"Hum: {m.get('title')!r} / {m.get('artist')!r} -> {canon['title']!r} / {canon['artist']!r}")
             m = {**m, **canon}
