@@ -2199,6 +2199,9 @@ def identify_hum():
             timeout=20,
         )
         resp.raise_for_status()
+        # ACRCloud sends UTF-8 without declaring a charset; requests then
+        # falls back to Latin-1 and mangles accents/non-Latin titles.
+        resp.encoding = "utf-8"
         result = resp.json()
     except Exception as e:
         logger.warning(f"Hum: identify request failed: {e}")
