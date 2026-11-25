@@ -2135,6 +2135,61 @@ ACRCLOUD_ACCESS_KEY = os.environ.get("ACRCLOUD_ACCESS_KEY", "")
 ACRCLOUD_ACCESS_SECRET = os.environ.get("ACRCLOUD_ACCESS_SECRET", "")
 HUM_MAX_SECONDS = 15
 
+# A hum matches the melody, so ACRCloud often returns a cover/remix of the
+# right song. Swap each match for the most popular primary recording of the
+# same title on Deezer. Exact-title guard: if Deezer has no track with the
+# same (cleaned) title, keep ACRCloud's result rather than risk a
+# different song that merely shares words.
+import re as _re
+_HUM_VERSION_WORDS = (
+    r"remix|mix|live|version|remaster(?:ed)?|edit|acoustic|instrumental|"
+    r"ao vivo|en vivo|cover|karaoke|demo|mono|stereo|radio|extended|sped up|slowed"
+)
+_HUM_PAREN_RE = _re.compile(
+    rf"\s*[(\[][^)\]]*\b(?:{_HUM_VERSION_WORDS})\b[^)\]]*[)\]]\s*$", _re.IGNORECASE
+)
+_HUM_DASH_RE = _re.compile(
+    rf"\s+-\s+[^-]*\b(?:{_HUM_VERSION_WORDS})\b.*$", _re.IGNORECASE
+)
+
+
+def _clean_hum_title(title: str) -> str:
+    t = _HUM_PAREN_RE.sub("", title or "")
+    t = _HUM_DASH_RE.sub("", t)
+    return t.strip()
+
+
+def _canonical_version(title: str):
+    """Most popular primary Deezer recording with the same title, or None."""
+    clean = _clean_hum_title(title)
+    if not clean:
+        return None
+    try:
+        resp = http_requests.get(
+            "https://api.deezer.com/search",
+            params={"q": clean, "limit": 25},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        items = resp.json().get("data") or []
+    except Exception as e:
+        logger.warning(f"Hum: Deezer lookup failed for {clean!r}: {e}")
+        return None
+    target = clean.lower()
+    same = [
+        d for d in items
+        if _clean_hum_title(d.get("title_short") or d.get("title") or "").lower() == target
+    ]
+    if not same:
+        return None
+    # Primary recordings (no title_version) first, then most popular.
+    same.sort(key=lambda d: (bool(d.get("title_version")), -(d.get("rank") or 0)))
+    best = same[0]
+    return {
+        "title": best.get("title_short") or best.get("title") or clean,
+        "artist": (best.get("artist") or {}).get("name", ""),
+    }
+
 
 @app.route("/identify-hum", methods=["POST", "OPTIONS"])
 def identify_hum():
@@ -2244,7 +2299,21 @@ def identify_hum():
         if len(matches) >= 5:
             break
 
-    return jsonify({"matches": matches})
+    # Swap to the most popular version, then de-duplicate: a remix and the
+    # original often both resolve to the same canonical track.
+    resolved, resolved_seen = [], set()
+    for m in matches:
+        canon = _canonical_version(m.get("title", ""))
+        if canon:
+            logger.info(f"Hum: {m.get('title')!r} / {m.get('artist')!r} -> {canon['title']!r} / {canon['artist']!r}")
+            m = {**m, **canon}
+        key = (m.get("title", "").lower(), m.get("artist", "").lower())
+        if key in resolved_seen:
+            continue
+        resolved_seen.add(key)
+        resolved.append(m)
+
+    return jsonify({"matches": resolved})
 
 
 @app.route("/analyze", methods=["POST", "OPTIONS"])
